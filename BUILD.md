@@ -3,7 +3,7 @@
 | # | ID | Task | Status | Gate |
 |---|---|---|---|---|
 | 1 | P0 | Repository scaffold | done | |
-| 2 | P1 | XOS Bench — tool-call harness | todo | *GATE* |
+| 2 | P1 | XOS Bench — tool-call harness | in-progress | *GATE* |
 | 3 | P2 | xosd skeleton, provider trait, halt primitive | todo | |
 | 4 | P3 | xos chat TUI | todo | |
 | 5 | P4 | XOS Vault and cloud providers | todo | |
