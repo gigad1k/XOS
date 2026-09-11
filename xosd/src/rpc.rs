@@ -896,6 +896,55 @@ async fn dispatch(
             }))
         }
 
+        // Set how often XOS asks. Written to the config, which is where this
+        // setting lives, and it takes effect when the daemon next starts. The
+        // policy engine is built once at startup and held without a lock, so
+        // pretending it changed underneath a running daemon would be a lie that
+        // matters: somebody would believe they had tightened the rules.
+        "policy.strictness" => {
+            let wanted = request
+                .params
+                .get("strictness")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match crate::policy::Strictness::parse(wanted) {
+                None => {
+                    let body = failure(
+                        request.id.clone(),
+                        INVALID_PARAMS,
+                        "strictness is one of: strict, standard, permissive",
+                    );
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+                Some(strictness) => {
+                    let path = crate::config::config_path();
+                    match crate::config::Config::load_or_create(&path) {
+                        Err(error) => Some(json!({
+                            "ok": false,
+                            "error": format!("cannot read {}: {}", path.display(), error),
+                        })),
+                        Ok(mut config) => {
+                            config.policy.strictness = strictness;
+                            match config.write(&path) {
+                                Ok(()) => Some(json!({
+                                    "ok": true,
+                                    "strictness": strictness.label(),
+                                    "means": strictness.describe(),
+                                    "in_effect": false,
+                                    "note": "written to the config; it applies when xosd next starts",
+                                })),
+                                Err(error) => Some(json!({
+                                    "ok": false,
+                                    "error": format!("cannot write {}: {}", path.display(), error),
+                                })),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         "policy.log" => {
             let limit = request
                 .params

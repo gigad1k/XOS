@@ -658,8 +658,11 @@ fn act(
                 _ => None,
             };
             let asking = prompt("  Asking [1/2/3, Enter to skip]: ");
+            // These are the words the daemon actually parses. This step used to
+            // send one that nothing recognised, so choosing it did nothing at
+            // all and said so to nobody.
             let strictness = match asking.trim() {
-                "1" => Some("paranoid"),
+                "1" => Some("strict"),
                 "2" => Some("standard"),
                 "3" => Some("permissive"),
                 _ => None,
@@ -670,11 +673,21 @@ fn act(
                 state.cost_mode = Some(mode.to_string());
             }
             if let Some(strictness) = strictness {
-                let _ = connection.call(
-                    "policy.strictness",
-                    json!({ "strictness": strictness }),
-                );
-                state.strictness = Some(strictness.to_string());
+                match connection.call("policy.strictness", json!({ "strictness": strictness })) {
+                    Ok(answer) if answer.get("ok").and_then(Value::as_bool) == Some(true) => {
+                        state.strictness = Some(strictness.to_string());
+                        if answer.get("in_effect").and_then(Value::as_bool) == Some(false) {
+                            say("  Saved. It applies when XOS next starts.\n");
+                        }
+                    }
+                    Ok(answer) => say(&format!(
+                        "  That was not saved: {}\n",
+                        answer.get("error").and_then(Value::as_str).unwrap_or("no reason given")
+                    )),
+                    // A setting that silently does nothing is worse than one
+                    // that refuses, because somebody believes they tightened it.
+                    Err(error) => say(&format!("  That was not saved: {}\n", error)),
+                }
             }
             Ok(state.cost_mode.is_some() || state.strictness.is_some())
         }
@@ -921,6 +934,18 @@ mod tests {
         let allowlist = output.find("allowlist").expect("the allowlist requirement");
         assert!(output.contains("every conversation"), "{}", output);
         assert!(warning < output.len() && allowlist < output.len());
+    }
+
+    #[test]
+    fn the_policy_step_offers_words_the_daemon_understands() {
+        // It used to offer a word nothing parses, so choosing it did nothing
+        // at all. The daemon's vocabulary is the only vocabulary.
+        let source = include_str!("setup.rs");
+        let body = source.split("#[cfg(test)]").next().expect("the code");
+        assert!(!body.contains("paranoid"), "the daemon has never heard of it");
+        for word in ["strict", "standard", "permissive"] {
+            assert!(body.contains(word), "{} is not offered", word);
+        }
     }
 
     #[test]

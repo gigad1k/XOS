@@ -94,6 +94,29 @@ impl Strictness {
             Strictness::Permissive => "permissive",
         }
     }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_lowercase().as_str() {
+            "strict" => Some(Strictness::Strict),
+            "standard" => Some(Strictness::Standard),
+            "permissive" => Some(Strictness::Permissive),
+            _ => None,
+        }
+    }
+
+    /// What this setting means, in the words the wizard uses.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            Strictness::Strict => {
+                "asks before anything that writes, not only before what cannot be undone"
+            }
+            Strictness::Standard => "asks before anything that cannot be undone",
+            Strictness::Permissive => {
+                "asks rarely. Secret paths are still blocked and egress is still \
+                 redacted; only the prompting relaxes"
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
