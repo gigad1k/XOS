@@ -19,7 +19,7 @@
 | 15 | HW-1 | Hardware detection | done | |
 | 16 | HW-2 | Driver resolution and installation | done | *GATE* |
 | 17 | P13 | Installer | done | *GATE* |
-| 18 | P14 | First-run experience and first goal | todo | |
+| 18 | P14 | First-run experience and first goal | in-progress | |
 
 ## Status values
 todo · in-progress · done · blocked
