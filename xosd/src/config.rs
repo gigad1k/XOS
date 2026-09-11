@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::providers::anthropic::AnthropicConfig;
 use crate::providers::llama_cpp::LlamaCppConfig;
+use crate::providers::openai::OpenAiConfig;
+use crate::spend::Caps;
 
 pub const SYSTEM_SOCKET: &str = "/run/xosd.sock";
 
@@ -21,6 +24,9 @@ pub const SYSTEM_SOCKET: &str = "/run/xosd.sock";
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ProviderConfig {
     LlamaCpp(LlamaCppConfig),
+    /// OpenRouter, OpenAI, Groq, DeepSeek, Together, or any compatible base URL.
+    OpenAiCompatible(OpenAiConfig),
+    Anthropic(AnthropicConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +40,10 @@ pub struct Config {
     pub default_provider: String,
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
+    /// Daily spend ceilings. A provider over its cap becomes unavailable
+    /// rather than failing partway through a reply.
+    #[serde(default)]
+    pub caps: Caps,
 }
 
 fn default_socket() -> PathBuf {
@@ -55,6 +65,7 @@ impl Default for Config {
             socket: default_socket(),
             default_provider: default_provider_name(),
             providers,
+            caps: Caps::default(),
         }
     }
 }
@@ -65,6 +76,21 @@ pub fn config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("xos")
         .join("config.toml")
+}
+
+/// Where the vault keeps its encrypted file and name index.
+pub fn vault_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+}
+
+/// The spend database.
+pub fn spend_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("spend.db")
 }
 
 /// Where the halt flag is persisted.
@@ -188,7 +214,49 @@ mod tests {
                 assert!(llama.local);
                 assert!(!llama.base_url.is_empty());
             }
+            other => panic!("the default provider should be local, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn cloud_providers_and_caps_parse_from_toml() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+default_provider = "local"
+
+[caps]
+daily_total = 5.0
+
+[caps.daily_per_provider]
+openrouter = 2.0
+
+[providers.openrouter]
+kind = "open-ai-compatible"
+base_url = "https://openrouter.ai/api/v1"
+model = "openai/gpt-4o-mini"
+cost_per_1k_input = 0.00015
+
+[providers.anthropic]
+kind = "anthropic"
+model = "claude-sonnet-5"
+"#,
+        )
+        .expect("write config");
+
+        let config = Config::load_or_create(&path).expect("config loads");
+        assert_eq!(config.caps.daily_total, Some(5.0));
+        assert_eq!(config.caps.daily_per_provider.get("openrouter"), Some(&2.0));
+        assert!(matches!(
+            config.providers.get("openrouter"),
+            Some(ProviderConfig::OpenAiCompatible(_))
+        ));
+        assert!(matches!(
+            config.providers.get("anthropic"),
+            Some(ProviderConfig::Anthropic(_))
+        ));
     }
 
     #[test]

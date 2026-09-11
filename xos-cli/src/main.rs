@@ -6,6 +6,7 @@
 mod chat;
 mod socket;
 mod theme;
+mod vault;
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
@@ -33,6 +34,26 @@ enum Command {
     Status,
     /// Open the chat interface. This is the default way to use XOS.
     Chat,
+    /// Manage API credentials. Keys are stored by the daemon, never by this client.
+    #[command(subcommand)]
+    Vault(VaultCommand),
+    /// Report what each provider has cost, by day.
+    Spend {
+        /// How many days back to report.
+        #[arg(long, default_value_t = 7)]
+        days: u32,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum VaultCommand {
+    /// Store a key for a provider. It is typed without echo and sent straight
+    /// to the daemon.
+    Add { provider: String },
+    /// List the providers that have a stored credential. Names only.
+    List,
+    /// Remove a provider's credential.
+    Remove { provider: String },
 }
 
 fn main() -> std::process::ExitCode {
@@ -63,6 +84,12 @@ fn main() -> std::process::ExitCode {
         Command::Halt => halt(&mut connection),
         Command::Resume => resume(&mut connection),
         Command::Status => status(&mut connection),
+        Command::Spend { days } => vault::spend(&mut connection, days),
+        Command::Vault(command) => match command {
+            VaultCommand::Add { provider } => vault::add(&mut connection, &provider),
+            VaultCommand::List => vault::list(&mut connection),
+            VaultCommand::Remove { provider } => vault::remove(&mut connection, &provider),
+        },
         Command::Chat => unreachable!("chat is handled before the socket is opened"),
     }
     .and_then(|text| emit(&text));

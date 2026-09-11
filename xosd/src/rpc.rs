@@ -17,7 +17,9 @@ use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, info, warn};
 
 use crate::providers::{CompletionRequest, ProviderRegistry};
+use crate::spend::{cost_of, SpendBook};
 use crate::state::Halt;
+use crate::vault::Vault;
 
 pub const PARSE_ERROR: i32 = -32700;
 pub const INVALID_REQUEST: i32 = -32600;
@@ -26,6 +28,8 @@ pub const INVALID_PARAMS: i32 = -32602;
 pub const INTERNAL_ERROR: i32 = -32000;
 /// The system is halted, so nothing autonomous may run.
 pub const HALTED: i32 = -32001;
+/// The provider is over its daily spend cap.
+pub const OVER_CAP: i32 = -32002;
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -49,17 +53,46 @@ pub struct Daemon {
     pub registry: ProviderRegistry,
     pub halt: Arc<Halt>,
     pub default_provider: String,
+    pub vault: Arc<Vault>,
+    pub spend: Arc<SpendBook>,
     pub version: &'static str,
 }
 
 impl Daemon {
-    pub fn new(registry: ProviderRegistry, halt: Arc<Halt>, default_provider: String) -> Self {
+    pub fn new(
+        registry: ProviderRegistry,
+        halt: Arc<Halt>,
+        default_provider: String,
+        vault: Arc<Vault>,
+        spend: Arc<SpendBook>,
+    ) -> Self {
         Self {
             registry,
             halt,
             default_provider,
+            vault,
+            spend,
             version: env!("CARGO_PKG_VERSION"),
         }
+    }
+
+    /// Providers with their availability folded in, so a caller can see which
+    /// are usable before committing to a request.
+    fn provider_report(&self) -> Vec<Value> {
+        self.registry
+            .list()
+            .into_iter()
+            .map(|info| {
+                let availability = self.spend.availability(&info.name);
+                json!({
+                    "name": info.name,
+                    "capabilities": info.capabilities,
+                    "available": availability.is_available(),
+                    "unavailable_because": availability.reason(),
+                    "spent_today": self.spend.spent_today(&info.name).unwrap_or(0.0),
+                })
+            })
+            .collect()
     }
 }
 
@@ -144,11 +177,103 @@ async fn dispatch(
             "version": daemon.version,
             "halted": daemon.halt.is_halted(),
             "default_provider": daemon.default_provider,
-            "providers": daemon.registry.list(),
+            "providers": daemon.provider_report(),
             "halt_state_path": daemon.halt.state_path().display().to_string(),
         })),
 
-        "providers.list" => Some(json!({"providers": daemon.registry.list()})),
+        "providers.list" => Some(json!({"providers": daemon.provider_report()})),
+
+        // Key material goes in and never comes back out.
+        "vault.set" => {
+            #[derive(Deserialize)]
+            struct SetParams {
+                provider: String,
+                key: String,
+            }
+            match serde_json::from_value::<SetParams>(request.params.clone()) {
+                Ok(params) if params.key.trim().is_empty() => {
+                    let body = failure(request.id.clone(), INVALID_PARAMS, "the key is empty");
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+                Ok(params) => match daemon
+                    .vault
+                    .set(&params.provider, &params.key)
+                    .and_then(|()| daemon.vault.note_name(&params.provider))
+                {
+                    Ok(()) => {
+                        // The name is safe to log. The key is not, and is not.
+                        info!(provider = %params.provider, "credential stored");
+                        Some(json!({"provider": params.provider, "stored": true}))
+                    }
+                    Err(error) => {
+                        let body =
+                            failure(request.id.clone(), INTERNAL_ERROR, &error.to_string());
+                        let _ = write_line(writer, &body).await;
+                        None
+                    }
+                },
+                Err(error) => {
+                    let body = failure(request.id.clone(), INVALID_PARAMS, &error.to_string());
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "vault.list" => match daemon.vault.list() {
+            Ok(providers) => Some(json!({
+                "providers": providers,
+                "store": daemon.vault.backend().label(),
+            })),
+            Err(error) => {
+                let body = failure(request.id.clone(), INTERNAL_ERROR, &error.to_string());
+                let _ = write_line(writer, &body).await;
+                None
+            }
+        },
+
+        "vault.remove" => {
+            let provider = request
+                .params
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            match daemon
+                .vault
+                .remove(&provider)
+                .and_then(|()| daemon.vault.forget_name(&provider))
+            {
+                Ok(()) => Some(json!({"provider": provider, "removed": true})),
+                Err(error) => {
+                    let body = failure(request.id.clone(), INVALID_PARAMS, &error.to_string());
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "spend.report" => {
+            let days = request
+                .params
+                .get("days")
+                .and_then(Value::as_u64)
+                .unwrap_or(7) as u32;
+            match daemon.spend.by_day(days) {
+                Ok(rows) => Some(json!({
+                    "days": days,
+                    "rows": rows,
+                    "today_total": daemon.spend.spent_today_total().unwrap_or(0.0),
+                    "caps": daemon.spend.caps(),
+                })),
+                Err(error) => {
+                    let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
 
         "halt" => {
             // Deliberately the shortest path in the file.
@@ -246,6 +371,14 @@ async fn complete(
         }
     };
 
+    // Checked before the request rather than during it, so a cap never
+    // interrupts a reply that is already streaming.
+    if let Some(reason) = daemon.spend.availability(&name).reason() {
+        let body = failure(request.id.clone(), OVER_CAP, &reason);
+        let _ = write_line(writer, &body).await;
+        return None;
+    }
+
     let mut stream = match provider.complete(params.request).await {
         Ok(stream) => stream,
         Err(error) => {
@@ -305,11 +438,31 @@ async fn complete(
         }
     }
 
+    // Record what it cost before replying, so a cap reflects this call too.
+    let capabilities = provider.capabilities();
+    let charged = usage.map(|usage| {
+        let cost = cost_of(
+            usage.input_tokens,
+            usage.output_tokens,
+            capabilities.cost_per_1k_input,
+            capabilities.cost_per_1k_output,
+        );
+        if let Err(error) =
+            daemon
+                .spend
+                .record(&name, usage.input_tokens, usage.output_tokens, cost)
+        {
+            warn!(%error, "the completion finished but its spend was not recorded");
+        }
+        cost
+    });
+
     Some(json!({
         "provider": name,
         "text": text,
         "finish_reason": finish_reason,
         "usage": usage,
+        "cost": charged,
     }))
 }
 

@@ -6,7 +6,7 @@
 | 2 | P1 | XOS Bench — tool-call harness | done | *GATE* |
 | 3 | P2 | xosd skeleton, provider trait, halt primitive | done | |
 | 4 | P3 | xos chat TUI | done | |
-| 5 | P4 | XOS Vault and cloud providers | in-progress | |
+| 5 | P4 | XOS Vault and cloud providers | done | |
 | 6 | P5 | Router and escalation log | todo | *GATE* |
 | 7 | P6 | XOS Memory, export and import | todo | |
 | 8 | P7 | Policy engine and egress protection | todo | *GATE* |
@@ -117,3 +117,28 @@ real disks.
 - The local config now points at `llama3.2:latest` rather than `gemma4:e4b`, since
   that is what this machine has. That is in `~/.config/xos/config.toml`, not the
   repository, so it affects nothing for anyone else.
+
+- P4 — done. Check passed: `xos vault add openrouter` stored a key, `xos vault
+  list` showed the provider name and nothing else, and a completion ran against
+  a provider whose key came from the vault. Cost arithmetic verified by hand:
+  31 input and 6 output tokens at 0.15 and 0.60 per 1k is 0.00825, which is what
+  was recorded.
+- A canary key was traced through the whole run. It appears in no CLI output, no
+  daemon log, no config file, and not in the vault file, which is age ciphertext
+  at 0600. The daemon is the only process that reads key material; the CLI sends
+  a key in and never gets one back.
+- No keyring answered in WSL, so the age-encrypted file backend was the one
+  exercised. Its identity file sits beside the vault at 0600, so the protection
+  is file permissions plus encryption at rest. That is written down in the module
+  docs rather than implied, and the daemon logs which store is in use.
+- Caps are checked before a request starts, never during one. Over a cap the
+  provider is refused up front with -32002 and a sentence saying what to do. A
+  reply already streaming is never interrupted by a cap.
+- Verification limit: with no real cloud key available, the OpenAI-compatible
+  provider was pointed at the local Ollama endpoint, which ignores the bearer
+  token. That exercises vault to provider to completion to spend end to end, but
+  it does not prove a remote endpoint accepts the header. The Anthropic provider
+  is unit-tested for its event shapes, system prompt handling and required
+  max_tokens, and has not been run against the real API.
+- P3's TUI reaches cloud providers unchanged, since it asks the daemon which
+  provider is default and renders the tier colour from the capabilities.

@@ -13,13 +13,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{
-    Capabilities, CompletionRequest, Modality, Provider, ProviderError, Token, TokenStream, Usage,
-};
+use super::{Capabilities, CompletionRequest, Modality, Provider, ProviderError, TokenStream};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlamaCppConfig {
@@ -194,71 +191,8 @@ impl Provider for LlamaCppProvider {
             });
         }
 
-        let mut bytes = response.bytes_stream();
-        let stream = async_stream::stream! {
-            let mut buffer = String::new();
-            while let Some(chunk) = bytes.next().await {
-                let chunk = match chunk {
-                    Ok(chunk) => chunk,
-                    Err(error) => {
-                        yield Err(ProviderError::Transport(error.to_string()));
-                        return;
-                    }
-                };
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                // Server-sent events are newline delimited; a chunk can split
-                // one, so only whole lines are consumed.
-                while let Some(position) = buffer.find('\n') {
-                    let line = buffer[..position].trim().to_string();
-                    buffer.drain(..=position);
-                    let payload = match line.strip_prefix("data:") {
-                        Some(rest) => rest.trim(),
-                        None => continue,
-                    };
-                    if payload == "[DONE]" {
-                        return;
-                    }
-                    let event: Value = match serde_json::from_str(payload) {
-                        Ok(value) => value,
-                        Err(_) => continue,
-                    };
-
-                    let usage = read_usage(&event);
-                    let finish_reason = event
-                        .pointer("/choices/0/finish_reason")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    let text = event
-                        .pointer("/choices/0/delta/content")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-
-                    if text.is_empty() && finish_reason.is_none() && usage.is_none() {
-                        continue;
-                    }
-                    yield Ok(Token { text, finish_reason, usage });
-                }
-            }
-        };
-
-        Ok(Box::pin(stream))
+        Ok(super::sse::read(response, super::sse::openai_token))
     }
-}
-
-fn read_usage(event: &Value) -> Option<Usage> {
-    let usage = event.get("usage")?.as_object()?;
-    let read = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0) as u32;
-    Some(Usage {
-        input_tokens: read("prompt_tokens"),
-        output_tokens: read("completion_tokens"),
-        cached_tokens: usage
-            .get("prompt_tokens_details")
-            .and_then(|d| d.get("cached_tokens"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
-    })
 }
 
 #[cfg(test)]
@@ -331,11 +265,4 @@ mod tests {
         assert!(keyed.get("id_slot").is_some());
     }
 
-    #[test]
-    fn usage_is_read_from_a_chunk() {
-        let event = json!({"usage": {"prompt_tokens": 12, "completion_tokens": 5}});
-        let usage = read_usage(&event).expect("usage parses");
-        assert_eq!(usage.input_tokens, 12);
-        assert_eq!(usage.output_tokens, 5);
-    }
 }

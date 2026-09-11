@@ -9,7 +9,10 @@
 //! implement three methods and register it. Everything XOS-specific is layered
 //! on top by the daemon.
 
+pub mod anthropic;
 pub mod llama_cpp;
+pub mod openai;
+pub mod sse;
 
 use std::collections::BTreeMap;
 use std::fmt;

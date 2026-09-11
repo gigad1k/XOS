@@ -11,6 +11,7 @@ mod providers;
 mod router;
 mod rpc;
 mod scheduler;
+mod spend;
 mod state;
 mod supervisor;
 mod vault;
@@ -23,10 +24,14 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use config::{Config, ProviderConfig};
+use providers::anthropic::AnthropicProvider;
 use providers::llama_cpp::LlamaCppProvider;
+use providers::openai::OpenAiCompatibleProvider;
 use providers::ProviderRegistry;
 use rpc::Daemon;
+use spend::SpendBook;
 use state::Halt;
+use vault::Vault;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -65,6 +70,17 @@ async fn run() -> Result<(), String> {
         );
     }
 
+    let vault = Arc::new(Vault::open(&config::vault_dir()));
+    info!(store = vault.backend().label(), "vault opened");
+
+    let spend = Arc::new(
+        SpendBook::open(&config::spend_path(), config.caps.clone())
+            .map_err(|e| format!("spend: {}", e))?,
+    );
+    if let Some(cap) = config.caps.daily_total {
+        info!(daily_total = cap, "a global daily spend cap is set");
+    }
+
     let mut registry = ProviderRegistry::new();
     for (name, provider) in &config.providers {
         match provider {
@@ -75,8 +91,21 @@ async fn run() -> Result<(), String> {
                     provider = %name,
                     model = %settings.model,
                     prefix_cache = settings.slots > 0,
-                    "provider registered"
+                    "local provider registered"
                 );
+                registry.insert(Arc::new(provider));
+            }
+            ProviderConfig::OpenAiCompatible(settings) => {
+                let provider =
+                    OpenAiCompatibleProvider::new(name, settings.clone(), Arc::clone(&vault))
+                        .map_err(|e| format!("provider `{}`: {}", name, e))?;
+                info!(provider = %name, model = %settings.model, "cloud provider registered");
+                registry.insert(Arc::new(provider));
+            }
+            ProviderConfig::Anthropic(settings) => {
+                let provider = AnthropicProvider::new(name, settings.clone(), Arc::clone(&vault))
+                    .map_err(|e| format!("provider `{}`: {}", name, e))?;
+                info!(provider = %name, model = %settings.model, "cloud provider registered");
                 registry.insert(Arc::new(provider));
             }
         }
@@ -118,6 +147,8 @@ async fn run() -> Result<(), String> {
         registry,
         Arc::clone(&halt),
         config.default_provider.clone(),
+        vault,
+        spend,
     ));
 
     tokio::select! {
