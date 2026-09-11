@@ -4,7 +4,7 @@
 |---|---|---|---|---|
 | 1 | P0 | Repository scaffold | done | |
 | 2 | P1 | XOS Bench — tool-call harness | done | *GATE* |
-| 3 | P2 | xosd skeleton, provider trait, halt primitive | todo | |
+| 3 | P2 | xosd skeleton, provider trait, halt primitive | in-progress | |
 | 4 | P3 | xos chat TUI | todo | |
 | 5 | P4 | XOS Vault and cloud providers | todo | |
 | 6 | P5 | Router and escalation log | todo | *GATE* |
