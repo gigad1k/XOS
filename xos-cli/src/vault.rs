@@ -540,3 +540,108 @@ pub fn undo(connection: &mut Connection, last: u32) -> Result<String, String> {
     let _ = writeln!(out, "Undone {} actions.", descriptions.len());
     Ok(out)
 }
+
+/// `xos supervisor prompts`
+pub fn supervisor_prompts(connection: &mut Connection) -> Result<String, String> {
+    let result = connection.call("supervisor.prompts", json!({}))?;
+    let prompts = result
+        .get("prompts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "tokens today  {} of {}",
+        result.get("tokens_today").and_then(Value::as_u64).unwrap_or(0),
+        result.get("daily_ceiling").and_then(Value::as_u64).unwrap_or(0)
+    );
+    let _ = writeln!(out);
+    if prompts.is_empty() {
+        let _ = writeln!(out, "No prompts have been compiled yet.");
+        return Ok(out);
+    }
+    let _ = writeln!(
+        out,
+        "{:<18} {:>4} {:>6} {:>6} {:>7} {:>8}  {}",
+        "task type", "ver", "hits", "fails", "score", "guarded", "cache key"
+    );
+    for prompt in &prompts {
+        let _ = writeln!(
+            out,
+            "{:<18} {:>4} {:>6} {:>6} {:>7} {:>8}  {}",
+            prompt.get("task_type").and_then(Value::as_str).unwrap_or("-"),
+            prompt.get("version").and_then(Value::as_i64).unwrap_or(0),
+            prompt.get("hits").and_then(Value::as_i64).unwrap_or(0),
+            prompt.get("failures").and_then(Value::as_i64).unwrap_or(0),
+            prompt
+                .get("score")
+                .and_then(Value::as_f64)
+                .map(|s| format!("{:.2}", s))
+                .unwrap_or_else(|| "-".to_string()),
+            if prompt.get("guarded").and_then(Value::as_bool).unwrap_or(false) {
+                "yes"
+            } else {
+                "no"
+            },
+            prompt.get("cache_key").and_then(Value::as_str).unwrap_or("-")
+        );
+    }
+    Ok(out)
+}
+
+/// `xos supervisor log`
+pub fn supervisor_log(connection: &mut Connection, limit: u32) -> Result<String, String> {
+    let result = connection.call("supervisor.log", json!({"limit": limit}))?;
+    let entries = result
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let queued = result
+        .get("queued")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if !queued.is_empty() {
+        let _ = writeln!(
+            out,
+            "{} wakes are waiting for connectivity.",
+            queued.len()
+        );
+        let _ = writeln!(out);
+    }
+    if entries.is_empty() {
+        let _ = writeln!(out, "The supervisor has not considered a prompt yet.");
+        return Ok(out);
+    }
+    let _ = writeln!(
+        out,
+        "{:<16} {:<14} {:>6} {:>6}  {}",
+        "task type", "outcome", "was", "now", "note"
+    );
+    for entry in &entries {
+        let score = |key: &str| {
+            entry
+                .get(key)
+                .and_then(Value::as_f64)
+                .map(|s| format!("{:.2}", s))
+                .unwrap_or_else(|| "-".to_string())
+        };
+        let _ = writeln!(
+            out,
+            "{:<16} {:<14} {:>6} {:>6}  {}",
+            entry.get("task_type").and_then(Value::as_str).unwrap_or("-"),
+            entry.get("outcome").and_then(Value::as_str).unwrap_or("-"),
+            score("old_score"),
+            score("new_score"),
+            entry.get("note").and_then(Value::as_str).unwrap_or("")
+        );
+    }
+    Ok(out)
+}

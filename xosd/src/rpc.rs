@@ -28,6 +28,8 @@ use crate::router::log::{EscalationLog, Record};
 use crate::router::{self, CostMode, Observation, Router, Tier as RouteTier};
 use crate::spend::{cost_of, SpendBook};
 use crate::state::Halt;
+use crate::supervisor::{Supervisor, Trigger, WakeOutcome};
+use crate::supervisor::prompts::PromptCache;
 use crate::tools;
 use crate::vault::Vault;
 
@@ -73,6 +75,8 @@ pub struct Daemon {
     pub policy: Arc<Policy>,
     pub policy_log: Arc<PolicyLog>,
     pub journal: Arc<Journal>,
+    pub supervisor: Arc<Supervisor>,
+    pub prompt_cache: Arc<PromptCache>,
     pub version: &'static str,
 }
 
@@ -89,6 +93,8 @@ impl Daemon {
         policy: Arc<Policy>,
         policy_log: Arc<PolicyLog>,
         journal: Arc<Journal>,
+        supervisor: Arc<Supervisor>,
+        prompt_cache: Arc<PromptCache>,
     ) -> Self {
         Self {
             registry,
@@ -102,6 +108,8 @@ impl Daemon {
             policy,
             policy_log,
             journal,
+            supervisor,
+            prompt_cache,
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -318,6 +326,118 @@ async fn dispatch(
                 }
                 Err(error) => {
                     let body = failure(request.id.clone(), INVALID_PARAMS, &error.to_string());
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "supervisor.wake" => wake(request, daemon, writer).await,
+
+        "supervisor.compile" => compile(request, daemon, writer).await,
+
+        // Process what was queued while offline.
+        "supervisor.flush" => {
+            let Some(name) = daemon.supervisor.config().provider.clone() else {
+                return Some(
+                    serde_json::to_value(WakeOutcome::NotConfigured).unwrap_or(Value::Null),
+                );
+            };
+            let Some(provider) = daemon.registry.get(&name) else {
+                return Some(json!({"processed": 0, "remaining": daemon.supervisor.queued().len()}));
+            };
+
+            let mut processed = 0usize;
+            let mut replies = Vec::new();
+            while let Some(queued) = daemon.supervisor.take_queued() {
+                match run_once(&provider, &queued.digest_text, None).await {
+                    Ok((text, tokens)) => {
+                        daemon.supervisor.charge(queued.trigger, tokens);
+                        processed += 1;
+                        replies.push(json!({
+                            "trigger": queued.trigger.label(),
+                            "tokens": tokens,
+                            "text": text.chars().take(200).collect::<String>(),
+                        }));
+                    }
+                    Err(error) => {
+                        // Still offline: put it back and stop, rather than
+                        // burning the queue against a dead connection.
+                        daemon.supervisor.queue(queued.trigger, &digest::Digest {
+                            text: queued.digest_text.clone(),
+                            estimated_tokens: 0,
+                            dropped: 0,
+                            redactions: 0,
+                            sources: Vec::new(),
+                        }, &error);
+                        break;
+                    }
+                }
+            }
+            info!(processed, "the supervisor worked through its queue");
+            Some(json!({
+                "processed": processed,
+                "remaining": daemon.supervisor.queued().len(),
+                "replies": replies,
+            }))
+        }
+
+        // Count how a cached prompt performed, which is what drives recompiling.
+        "supervisor.prompt_outcome" => {
+            let task_type = request
+                .params
+                .get("task_type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let succeeded = request
+                .params
+                .get("succeeded")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            match daemon.prompt_cache.record_use(task_type, succeeded) {
+                Ok(()) => {
+                    let prompt = daemon.prompt_cache.get(task_type);
+                    Some(json!({
+                        "task_type": task_type,
+                        "failure_rate": prompt.as_ref().map(|p| p.failure_rate()),
+                        "recompile_due": daemon.supervisor.should_recompile(prompt.as_ref()),
+                    }))
+                }
+                Err(error) => {
+                    let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "supervisor.prompts" => match daemon.prompt_cache.list() {
+            Ok(prompts) => Some(json!({
+                "prompts": prompts,
+                "tokens_today": daemon.supervisor.tokens_spent_today(),
+                "daily_ceiling": daemon.supervisor.config().daily_token_ceiling,
+            })),
+            Err(error) => {
+                let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                let _ = write_line(writer, &body).await;
+                None
+            }
+        },
+
+        "supervisor.log" => {
+            let limit = request
+                .params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20) as u32;
+            match daemon.prompt_cache.history(limit) {
+                Ok(entries) => Some(json!({
+                    "entries": entries,
+                    "queued": daemon.supervisor.queued(),
+                    "tokens_today": daemon.supervisor.tokens_spent_today(),
+                })),
+                Err(error) => {
+                    let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
                     let _ = write_line(writer, &body).await;
                     None
                 }
@@ -1255,6 +1375,330 @@ async fn promote(
             let _ = write_line(writer, &body).await;
             None
         }
+    }
+}
+
+/// Build a digest from the pieces a caller offers.
+///
+/// The supervisor is only ever given one of these. There is no path that hands
+/// it raw memory or raw tool output, because there is no parameter for it.
+fn digest_from(request: &Request) -> digest::Digest {
+    let pieces: Vec<digest::Piece> = request
+        .params
+        .get("pieces")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    digest::Piece::new(
+                        item.get("source").and_then(Value::as_str).unwrap_or("unknown"),
+                        item.get("content").and_then(Value::as_str).unwrap_or(""),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    digest::build(&pieces, digest::TOKEN_CAP)
+}
+
+fn trigger_from(request: &Request) -> Trigger {
+    match request
+        .params
+        .get("trigger")
+        .and_then(Value::as_str)
+        .unwrap_or("manual")
+    {
+        "new-goal" => Trigger::NewGoal,
+        "node-failure" => Trigger::NodeFailure,
+        "batch-review" => Trigger::BatchReview,
+        "prompt-compile" => Trigger::PromptCompile,
+        "confidence-floor" => Trigger::ConfidenceFloor,
+        "novel-situation" => Trigger::NovelSituation,
+        "daily-pass" => Trigger::DailyPass,
+        _ => Trigger::Manual,
+    }
+}
+
+/// Ask the supervisor tier to think once.
+async fn wake(
+    request: &Request,
+    daemon: &Arc<Daemon>,
+    writer: &mut (impl AsyncWriteExt + Unpin + Send),
+) -> Option<Value> {
+    if daemon.halt.guard().is_err() {
+        let body = failure(request.id.clone(), HALTED, "the system is halted.");
+        let _ = write_line(writer, &body).await;
+        return None;
+    }
+
+    let trigger = trigger_from(request);
+    let packet = digest_from(request);
+
+    if let Err(outcome) = daemon.supervisor.may_wake(trigger) {
+        return Some(serde_json::to_value(outcome).unwrap_or(Value::Null));
+    }
+    if let Err(outcome) = daemon.supervisor.vet(&packet) {
+        warn!(trigger = trigger.label(), "a wake was refused before sending");
+        return Some(serde_json::to_value(outcome).unwrap_or(Value::Null));
+    }
+    // The guardrail, made loud for whoever introduced the bug. `vet` has already
+    // refused in a release build; this stops a developer walking past it.
+    debug_assert!(
+        redact::scan(&packet.text).is_empty(),
+        "a digest reached the supervisor carrying credential-shaped strings"
+    );
+
+    let Some(name) = daemon.supervisor.config().provider.clone() else {
+        return Some(serde_json::to_value(WakeOutcome::NotConfigured).unwrap_or(Value::Null));
+    };
+    let Some(provider) = daemon.registry.get(&name) else {
+        return Some(
+            serde_json::to_value(WakeOutcome::Deferred {
+                reason: format!("`{}` is not a configured provider", name),
+            })
+            .unwrap_or(Value::Null),
+        );
+    };
+
+    let instruction = request
+        .params
+        .get("instruction")
+        .and_then(Value::as_str)
+        .unwrap_or("Read this context and say what should happen next, briefly.");
+    let prompt = format!("{}\n\n{}", instruction, packet.text);
+
+    match run_once(&provider, &prompt, None).await {
+        Ok((text, tokens)) => {
+            daemon.supervisor.charge(trigger, tokens);
+            info!(trigger = trigger.label(), tokens, "the supervisor woke");
+            Some(json!({
+                "outcome": "woke",
+                "trigger": trigger.label(),
+                "tokens": tokens,
+                "text": text,
+                "digest_tokens": packet.estimated_tokens,
+                "digest_redactions": packet.redactions,
+            }))
+        }
+        Err(error) => {
+            // Offline is not a failure. Cached prompts keep working and known
+            // task types keep executing; only new thinking waits.
+            let outcome = daemon.supervisor.queue(trigger, &packet, &error);
+            warn!(trigger = trigger.label(), %error, "the supervisor is offline, so the wake is queued");
+            Some(serde_json::to_value(outcome).unwrap_or(Value::Null))
+        }
+    }
+}
+
+/// Compile a prompt for a task type, and adopt it only if it scores better.
+async fn compile(
+    request: &Request,
+    daemon: &Arc<Daemon>,
+    writer: &mut (impl AsyncWriteExt + Unpin + Send),
+) -> Option<Value> {
+    let task_type = request
+        .params
+        .get("task_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if task_type.is_empty() {
+        let body = failure(request.id.clone(), INVALID_PARAMS, "no task type given");
+        let _ = write_line(writer, &body).await;
+        return None;
+    }
+
+    let existing = daemon.prompt_cache.get(&task_type);
+    let forced = request
+        .params
+        .get("force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let supplied = request.params.get("body").is_some();
+
+    // A prompt that is working is left alone: recompiling costs money and risks
+    // drift, and the failure rate is what says it is worth doing.
+    if !forced && !supplied && !daemon.supervisor.should_recompile(existing.as_ref()) {
+        return Some(json!({
+            "task_type": task_type,
+            "outcome": "not-due",
+            "adopted": false,
+            "failure_rate": existing.as_ref().map(|p| p.failure_rate()),
+            "reason": "the prompt in use is performing well enough to leave alone",
+        }));
+    }
+
+    // A caller can supply a body directly; otherwise the supervisor writes one.
+    let candidate = match request.params.get("body").and_then(Value::as_str) {
+        Some(body) => body.to_string(),
+        None => {
+            let packet = digest_from(request);
+            if let Err(outcome) = daemon.supervisor.may_wake(Trigger::PromptCompile) {
+                return Some(serde_json::to_value(outcome).unwrap_or(Value::Null));
+            }
+            if let Err(outcome) = daemon.supervisor.vet(&packet) {
+                return Some(serde_json::to_value(outcome).unwrap_or(Value::Null));
+            }
+            let Some(name) = daemon.supervisor.config().provider.clone() else {
+                return Some(
+                    serde_json::to_value(WakeOutcome::NotConfigured).unwrap_or(Value::Null),
+                );
+            };
+            let Some(provider) = daemon.registry.get(&name) else {
+                return Some(
+                    serde_json::to_value(WakeOutcome::Deferred {
+                        reason: format!("`{}` is not a configured provider", name),
+                    })
+                    .unwrap_or(Value::Null),
+                );
+            };
+            let instruction = format!(
+                "Write tight instructions for a small local model that has to do `{}` \
+                 repeatedly. Include what to do, the exact shape of the output, and the \
+                 mistakes to avoid. Write the instructions only, with no preamble.\n\n{}",
+                task_type, packet.text
+            );
+            match run_once(&provider, &instruction, None).await {
+                Ok((text, tokens)) => {
+                    daemon.supervisor.charge(Trigger::PromptCompile, tokens);
+                    text
+                }
+                Err(error) => {
+                    let outcome = daemon.supervisor.queue(Trigger::PromptCompile, &packet, &error);
+                    return Some(serde_json::to_value(outcome).unwrap_or(Value::Null));
+                }
+            }
+        }
+    };
+
+    // Score the candidate, and the incumbent, on the same cases.
+    let cases: Vec<(String, String)> = request
+        .params
+        .get("eval_cases")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some((
+                        item.get("prompt").and_then(Value::as_str)?.to_string(),
+                        item.get("expect_contains")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let local = daemon
+        .router
+        .read()
+        .ok()
+        .map(|router| router.config().local.clone())
+        .unwrap_or_else(|| daemon.default_provider.clone());
+
+    let mut candidate_score = None;
+    let mut incumbent_score = existing.as_ref().and_then(|prompt| prompt.score);
+    if !cases.is_empty() {
+        if let Some(provider) = daemon.registry.get(&local) {
+            candidate_score = Some(score(&provider, &candidate, &cases).await);
+            // Re-score the incumbent on the same cases, so the comparison is
+            // like for like rather than against a figure from another day.
+            if let Some(current) = &existing {
+                incumbent_score = Some(score(&provider, &current.body, &cases).await);
+            }
+        }
+    }
+
+    // The guard compares against the incumbent's score as just measured on the
+    // same cases, so the comparison is like for like rather than against a
+    // figure from another day.
+    if let (Some(_), Some(measured)) = (&existing, incumbent_score) {
+        let _ = daemon.prompt_cache.set_score(&task_type, measured);
+    }
+    let decision = daemon
+        .prompt_cache
+        .adopt(&task_type, &candidate, candidate_score);
+
+    match decision {
+        Ok(decision) => {
+            let stored = daemon.prompt_cache.get(&task_type);
+            info!(
+                task_type = %task_type,
+                outcome = decision.label(),
+                "a prompt was considered"
+            );
+            Some(json!({
+                "task_type": task_type,
+                "outcome": decision.label(),
+                "adopted": decision.adopts(),
+                "candidate_score": candidate_score,
+                "incumbent_score": incumbent_score,
+                "cases_run": cases.len(),
+                "cache_key": stored.as_ref().map(|p| p.cache_key.clone()),
+                "version": stored.as_ref().map(|p| p.version),
+            }))
+        }
+        Err(error) => {
+            let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+            let _ = write_line(writer, &body).await;
+            None
+        }
+    }
+}
+
+/// Run one prompt to completion and report the text and what it cost.
+async fn run_once(
+    provider: &Arc<dyn crate::providers::Provider>,
+    prompt: &str,
+    cache_key: Option<String>,
+) -> Result<(String, u64), String> {
+    let mut stream = provider
+        .complete(CompletionRequest {
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }],
+            cache_key,
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut text = String::new();
+    let mut tokens = 0u64;
+    while let Some(token) = futures_util::StreamExt::next(&mut stream).await {
+        let token = token.map_err(|e| e.to_string())?;
+        text.push_str(&token.text);
+        if let Some(usage) = token.usage {
+            tokens = (usage.input_tokens + usage.output_tokens) as u64;
+        }
+    }
+    Ok((text.trim().to_string(), tokens))
+}
+
+/// Score a prompt on real cases, using the local model that will run it.
+async fn score(
+    provider: &Arc<dyn crate::providers::Provider>,
+    body: &str,
+    cases: &[(String, String)],
+) -> f64 {
+    let mut passed = 0usize;
+    for (prompt, expected) in cases {
+        let combined = format!("{}\n\n{}", body, prompt);
+        if let Ok((text, _)) = run_once(provider, &combined, None).await {
+            if expected.is_empty() || text.to_lowercase().contains(&expected.to_lowercase()) {
+                passed += 1;
+            }
+        }
+    }
+    if cases.is_empty() {
+        0.0
+    } else {
+        passed as f64 / cases.len() as f64
     }
 }
 

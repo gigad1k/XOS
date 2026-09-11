@@ -18,6 +18,7 @@ use crate::providers::llama_cpp::LlamaCppConfig;
 use crate::memory::embed::EmbedderConfig;
 use crate::journal::JournalConfig;
 use crate::policy::PolicyConfig;
+use crate::supervisor::SupervisorConfig;
 use crate::providers::openai::OpenAiConfig;
 use crate::router::RouterConfig;
 use crate::spend::Caps;
@@ -63,6 +64,9 @@ pub struct Config {
     /// How long undo stays possible.
     #[serde(default)]
     pub journal: JournalConfig,
+    /// The event-driven cloud tier.
+    #[serde(default)]
+    pub supervisor: SupervisorConfig,
 }
 
 /// A scheduled, encrypted export of everything XOS remembers.
@@ -127,6 +131,7 @@ impl Default for Config {
             export: ExportConfig::default(),
             policy: PolicyConfig::default(),
             journal: JournalConfig::default(),
+            supervisor: SupervisorConfig::default(),
         }
     }
 }
@@ -144,6 +149,14 @@ pub fn vault_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("xos")
+}
+
+/// The compiled prompt cache.
+pub fn prompts_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("prompts.db")
 }
 
 /// The action journal database.

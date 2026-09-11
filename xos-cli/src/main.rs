@@ -65,6 +65,9 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: u32,
     },
+    /// Inspect the cloud supervisor tier.
+    #[command(subcommand)]
+    Supervisor(SupervisorCommand),
     /// Inspect the capability firewall.
     #[command(subcommand)]
     Policy(PolicyCommand),
@@ -78,6 +81,17 @@ enum Command {
         #[arg(long, default_value_t = 7)]
         days: u32,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum SupervisorCommand {
+    /// Show prompt compilations, adopted and rejected.
+    Log {
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Show the compiled prompts and how they are performing.
+    Prompts,
 }
 
 #[derive(Subcommand, Debug)]
@@ -172,6 +186,10 @@ fn main() -> std::process::ExitCode {
         Command::Journal { goal, tool, limit } => {
             vault::journal(&mut connection, goal.as_deref(), tool.as_deref(), limit)
         }
+        Command::Supervisor(command) => match command {
+            SupervisorCommand::Log { limit } => vault::supervisor_log(&mut connection, limit),
+            SupervisorCommand::Prompts => vault::supervisor_prompts(&mut connection),
+        },
         Command::Policy(command) => match command {
             PolicyCommand::Log { limit } => vault::policy_log(&mut connection, limit),
             PolicyCommand::Test { tool, arguments } => {

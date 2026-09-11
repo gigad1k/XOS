@@ -33,6 +33,7 @@ use providers::ProviderRegistry;
 use journal::Journal;
 use memory::Memory;
 use policy::log::PolicyLog;
+use supervisor::{PromptCache, Supervisor};
 use policy::Policy;
 use router::log::EscalationLog;
 use router::Router;
@@ -195,6 +196,19 @@ async fn run() -> Result<(), String> {
         "action journal ready"
     );
 
+    let supervisor = Arc::new(Supervisor::new(config.supervisor.clone()));
+    let prompt_cache = Arc::new(
+        PromptCache::open(&config::prompts_path()).map_err(|e| format!("prompts: {}", e))?,
+    );
+    match &config.supervisor.provider {
+        Some(provider) => info!(
+            provider = %provider,
+            daily_tokens = config.supervisor.daily_token_ceiling,
+            "supervisor ready, and asleep"
+        ),
+        None => info!("no supervisor provider is configured, so XOS runs local-only"),
+    }
+
     let policy = Arc::new(Policy::new(config.policy.clone()));
     let policy_log = Arc::new(
         PolicyLog::open(&config::policy_log_path()).map_err(|e| format!("policy log: {}", e))?,
@@ -221,6 +235,8 @@ async fn run() -> Result<(), String> {
         policy,
         policy_log,
         journal,
+        supervisor,
+        prompt_cache,
     ));
 
     if config.export.enabled {

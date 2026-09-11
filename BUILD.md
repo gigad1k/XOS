@@ -11,7 +11,7 @@
 | 7 | P6 | XOS Memory, export and import | done | |
 | 8 | P7 | Policy engine and egress protection | done | *GATE* |
 | 9 | P7b | Action journal and undo | done | *GATE* |
-| 10 | P8 | Supervisor | in-progress | |
+| 10 | P8 | Supervisor | done | |
 | 11 | P9 | XOS Goals, the task graph | todo | |
 | 12 | P10 | XOS Pulse and power management | todo | |
 | 13 | P11 | Status bar and desktop theme | todo | |
@@ -261,3 +261,32 @@ real disks.
   explanation.
 - Not yet wired: retention prunes by age on startup. The 2GB ceiling is recorded
   in config but not yet enforced, since nothing here can produce that volume.
+
+- P8 — done. Check passed: two wakes with nothing listening queued rather than
+  erroring, `supervisor.flush` processed both once an endpoint appeared, a first
+  compile was adopted and the second identical task type reported not-due from
+  the cache, and a deliberately worse candidate scored 0.00 against the
+  incumbent's 1.00 on real cases and was rejected with both scores logged.
+- The regression guard re-scores the incumbent on the same cases before
+  comparing, so the decision is like for like rather than against a figure from
+  another day. That re-measurement is bookkeeping and no longer writes a history
+  line: the first run logged a spurious "rejected 1.00 to 1.00" that made the
+  audit trail read as if a decision had been made when none had.
+- A replacement that cannot be scored is refused rather than adopted, because
+  silent drift is exactly what the guard exists to stop. A first compile has
+  nothing to regress from, so it is adopted and marked unguarded, and
+  `xos supervisor prompts` shows which prompts are in that state.
+- The supervisor can only be handed a digest: `wake` takes one and there is no
+  parameter for raw memory or raw tool output. The digest is re-scanned
+  immediately before sending and a wake carrying anything credential-shaped is
+  refused. `vet` returns rather than panicking so the refusal is testable and a
+  release build still refuses; the send path carries the debug assertion.
+- Recompiling changes the `cache_key`, which is what evicts the stale prefix from
+  llama.cpp's slot, and resets the hit and failure counts, because old failures
+  belong to the old prompt.
+- Cost classes throttle independently: an expensive trigger going quiet does not
+  silence a cheap one, and manual is never throttled. Over the daily ceiling the
+  supervisor defers and says work stays local, rather than failing.
+- Unverified: prompt compilation was exercised against a stand-in endpoint, not a
+  real cloud model, so the quality of a compiled prompt is untested. The
+  machinery around it — caching, scoring, adoption, rejection — is.
