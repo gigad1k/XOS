@@ -14,7 +14,7 @@
 | 10 | P8 | Supervisor | done | |
 | 11 | P9 | XOS Goals, the task graph | done | |
 | 12 | P10 | XOS Pulse and power management | done | |
-| 13 | P11 | Status bar and desktop theme | todo | |
+| 13 | P11 | Status bar and desktop theme | in-progress | |
 | 14 | P12 | Mission Control | todo | |
 | 15 | HW-1 | Hardware detection | todo | |
 | 16 | HW-2 | Driver resolution and installation | todo | *GATE* |
