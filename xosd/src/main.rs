@@ -7,6 +7,7 @@ mod config;
 mod graph;
 mod journal;
 mod memory;
+mod mission;
 mod policy;
 mod providers;
 mod router;
@@ -274,6 +275,17 @@ async fn run() -> Result<(), String> {
     ));
 
     spawn_heartbeat(Arc::clone(&daemon));
+
+    // Mission Control, on loopback only. It is a window onto this machine and
+    // has no business being reachable from anywhere else.
+    let mission_address = format!("127.0.0.1:{}", config.mission_port);
+    match tokio::net::TcpListener::bind(&mission_address).await {
+        Ok(listener) => {
+            info!(address = %mission_address, "mission control is on");
+            tokio::spawn(mission::serve(listener, Arc::clone(&daemon)));
+        }
+        Err(error) => warn!(%error, address = %mission_address, "mission control could not start"),
+    }
 
     if config.export.enabled {
         spawn_scheduled_export(config.clone(), Arc::clone(&memory));

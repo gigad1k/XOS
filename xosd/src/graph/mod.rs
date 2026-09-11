@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     conditions    TEXT    NOT NULL DEFAULT '',
     result        TEXT,
     failure       TEXT,
+    -- A person said yes to this node's prompt. Cleared once it has been used,
+    -- so one approval covers one attempt rather than all future ones.
+    confirmed     INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
     FOREIGN KEY (goal_id) REFERENCES goals (id)
@@ -132,6 +135,8 @@ pub struct Node {
     pub conditions: Vec<Condition>,
     pub result: Option<String>,
     pub failure: Option<String>,
+    /// A person has approved this node's prompt.
+    pub confirmed: bool,
 }
 
 impl Node {
@@ -357,7 +362,7 @@ impl Graph {
         let mut statement = connection
             .prepare(
                 "SELECT id, goal_id, title, detail, state, position, attempts, retry_budget,
-                        conditions, result, failure
+                        conditions, result, failure, confirmed
                  FROM nodes WHERE state = 'pending' ORDER BY goal_id, position",
             )
             .map_err(|e| e.to_string())?;
@@ -380,7 +385,7 @@ impl Graph {
         let mut statement = connection
             .prepare(
                 "SELECT id, goal_id, title, detail, state, position, attempts, retry_budget,
-                        conditions, result, failure
+                        conditions, result, failure, confirmed
                  FROM nodes WHERE goal_id = ?1 ORDER BY position",
             )
             .map_err(|e| e.to_string())?;
@@ -399,7 +404,7 @@ impl Graph {
         connection
             .query_row(
                 "SELECT id, goal_id, title, detail, state, position, attempts, retry_budget,
-                        conditions, result, failure
+                        conditions, result, failure, confirmed
                  FROM nodes WHERE id = ?1",
                 params![node_id],
                 read_node,
@@ -525,6 +530,36 @@ impl Graph {
         self.set_state(node_id, NodeState::NeedsUser, reason)
     }
 
+    /// A person approved the prompt. The node becomes runnable and carries the
+    /// approval, so the next attempt goes ahead instead of asking again.
+    ///
+    /// Without this an approval does nothing: policy would re-evaluate on the
+    /// next attempt, prompt again, and the node would sit in needs-user forever.
+    pub fn approve(&self, node_id: &str) -> Result<(), String> {
+        {
+            let connection = self.connection.lock().map_err(|_| "graph lock".to_string())?;
+            connection
+                .execute(
+                    "UPDATE nodes SET confirmed = 1 WHERE id = ?1",
+                    params![node_id],
+                )
+                .map_err(|e| format!("cannot approve the node: {}", e))?;
+        }
+        self.set_state(node_id, NodeState::Pending, "approved by a person")
+    }
+
+    /// Spend the approval. One yes covers one attempt.
+    pub fn clear_confirmation(&self, node_id: &str) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|_| "graph lock".to_string())?;
+        connection
+            .execute(
+                "UPDATE nodes SET confirmed = 0 WHERE id = ?1",
+                params![node_id],
+            )
+            .map_err(|e| format!("cannot clear the approval: {}", e))?;
+        Ok(())
+    }
+
     /// Move a goal to done or failed once its nodes have settled.
     fn settle_goal(&self, goal_id: &str) -> Result<(), String> {
         let nodes = self.nodes(goal_id)?;
@@ -554,7 +589,7 @@ impl Graph {
         let mut statement = connection
             .prepare(
                 "SELECT id, goal_id, title, detail, state, position, attempts, retry_budget,
-                        conditions, result, failure
+                        conditions, result, failure, confirmed
                  FROM nodes WHERE state = 'failed' ORDER BY goal_id, position",
             )
             .map_err(|e| e.to_string())?;
@@ -581,6 +616,7 @@ fn read_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<Node> {
         conditions: serde_json::from_str(&conditions).unwrap_or_default(),
         result: row.get(9)?,
         failure: row.get(10)?,
+        confirmed: row.get::<_, i64>(11).unwrap_or(0) != 0,
     })
 }
 
@@ -725,6 +761,28 @@ mod tests {
             .eligible(&SystemState::unrestricted())
             .expect("eligible")
             .is_empty());
+    }
+
+    #[test]
+    fn an_approval_lets_the_next_attempt_through() {
+        // Without this, policy would prompt again on the next attempt and the
+        // node would sit in needs-user forever, however many times it was
+        // approved.
+        let graph = graph();
+        plan_three(&graph);
+        let node = graph.eligible(&SystemState::unrestricted()).expect("eligible")[0].clone();
+        graph.needs_user(&node.id, "cannot be undone").expect("needs user");
+
+        graph.approve(&node.id).expect("approve");
+        let approved = graph.node(&node.id).expect("node");
+        assert_eq!(approved.state, "pending", "it must be runnable again");
+        assert!(approved.confirmed, "the approval must be carried");
+
+        graph.clear_confirmation(&node.id).expect("clear");
+        assert!(
+            !graph.node(&node.id).expect("node").confirmed,
+            "one yes covers one attempt"
+        );
     }
 
     #[test]

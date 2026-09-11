@@ -15,7 +15,7 @@
 | 11 | P9 | XOS Goals, the task graph | done | |
 | 12 | P10 | XOS Pulse and power management | done | |
 | 13 | P11 | Status bar and desktop theme | done | |
-| 14 | P12 | Mission Control | in-progress | |
+| 14 | P12 | Mission Control | done | |
 | 15 | HW-1 | Hardware detection | todo | |
 | 16 | HW-2 | Driver resolution and installation | todo | *GATE* |
 | 17 | P13 | Installer | todo | *GATE* |
@@ -381,3 +381,31 @@ real disks.
 - Verification limit: there is no compositor on this machine, so waybar,
   Hyprland and Plymouth rendering are unverified. What was verified is the data
   the bar renders from and every branch that decides what it says.
+
+- P12 — done. Check passed: a three-node goal ran, states updated live over
+  `/api/state`, a node reaching needs-user was approved from the UI, and the
+  graph then advanced to completion with the goal reaching done.
+- The check found the bug that mattered. An approval did not stick: policy
+  re-evaluated on the next attempt, prompted again, and the node returned to
+  needs-user however many times it was approved. The state machine looked right
+  and the button did nothing. A node now carries the approval, one yes covers
+  one attempt, and the approval is spent when it is used.
+- It also found that approving a node that does not exist returned success.
+  Mission Control would have shown an approval that never happened, which is
+  worse in a transparency surface than anywhere else. Unknown nodes, and nodes
+  not actually waiting, are now refused with a reason.
+- Read-only except for two things, as the guardrail requires: approving a blocked
+  node and setting the cost mode, plus the halt control, which is the one thing
+  that must always be reachable. Everything else is a window.
+- The page holds no business logic. `/api/state` assembles one document in the
+  daemon and the page renders it; there is a test asserting no pricing or routing
+  logic appears in the page.
+- Colour compliance is tested rather than trusted: every six-digit hex in the
+  page is checked against the STYLE.md tokens, so a fourth hue fails the build.
+- Served on loopback only. It is a window onto this machine and has no business
+  being reachable from elsewhere. The HTTP surface is hand-rolled and small
+  enough to read in one sitting, which matters for something that exposes the
+  system's state.
+- Verification limit: no browser here, so the page was exercised through its
+  endpoints rather than rendered. Layout and motion are unverified; the data and
+  every action are not.

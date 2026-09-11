@@ -71,6 +71,13 @@ pub struct Config {
     /// The heartbeat, and what it is allowed to cost.
     #[serde(default)]
     pub pulse: PulseConfig,
+    /// Where Mission Control listens, on loopback.
+    #[serde(default = "default_mission_port")]
+    pub mission_port: u16,
+}
+
+fn default_mission_port() -> u16 {
+    7777
 }
 
 /// A scheduled, encrypted export of everything XOS remembers.
@@ -137,6 +144,7 @@ impl Default for Config {
             journal: JournalConfig::default(),
             supervisor: SupervisorConfig::default(),
             pulse: PulseConfig::default(),
+            mission_port: default_mission_port(),
         }
     }
 }

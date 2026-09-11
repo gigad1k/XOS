@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>XOS Mission Control</title>
+<style>
+/* Instrumentation, not a consumer app. Dense rows, hairlines, 3px radius, no
+   shadows. Labels in sans left-aligned, values in mono right-aligned with
+   tabular numerals. Colour means one of three things and nothing else. */
+:root {
+  --base: #262523;
+  --surface: #302E2B;
+  --surface-hi: #3A3835;
+  --line: #454340;
+  --text: #E4E1DB;
+  --dim: #8F8B84;
+  --faint: #66625C;
+  --local: #7A9B6E;
+  --api: #C8934A;
+  --stop: #A85445;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--base);
+  color: var(--text);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+}
+body.halted { background: var(--stop); }
+body.halted header { background: var(--stop); border-bottom-color: var(--stop); }
+body.halted .panel { border-color: var(--stop); }
+
+header {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 16px;
+  background: var(--base);
+  border-bottom: 1px solid var(--line);
+}
+h1 { font-size: 13px; font-weight: 500; margin: 0; letter-spacing: 0.02em; }
+.spacer { flex: 1; }
+
+button {
+  font-family: inherit; font-size: 12px;
+  color: var(--text); background: var(--surface-hi);
+  border: 1px solid var(--line); border-radius: 3px;
+  padding: 4px 10px; cursor: pointer;
+}
+button:hover { background: var(--line); }
+button.stop { color: var(--stop); border-color: var(--stop); background: transparent; }
+button.stop:hover { background: var(--stop); color: var(--base); }
+
+main {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.4fr) 1fr;
+  gap: 12px; padding: 12px;
+}
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.panel h2 {
+  font-size: 11px; font-weight: 500; text-transform: lowercase;
+  color: var(--dim); margin: 0 0 8px; letter-spacing: 0.04em;
+}
+
+/* Dense data rows: label left in sans, value right in mono. */
+.row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+.row + .row { border-top: 1px solid var(--line); }
+.row .k { color: var(--dim); }
+.row .v {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right; white-space: nowrap;
+}
+
+.goal { border-top: 1px solid var(--line); padding: 8px 0; }
+.goal:first-of-type { border-top: none; }
+.goal .title { display: flex; justify-content: space-between; gap: 12px; }
+.goal .desc { font-weight: 500; }
+.node {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 2px 0 2px 14px;
+  /* Motion only on a state change. */
+  transition: color 160ms linear;
+}
+.state {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px; min-width: 88px; color: var(--faint);
+}
+.node.done .state    { color: var(--local); }
+.node.running .state { color: var(--local); }
+.node.failed .state,
+.node.needs-user .state { color: var(--stop); }
+.node.blocked .state, .node.pending .state { color: var(--faint); }
+.node .result { color: var(--dim); font-size: 12px; }
+
+.attention {
+  border: 1px solid var(--stop);
+  border-radius: 3px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.attention h2 { color: var(--stop); }
+.attention .item { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; font-weight: 400; font-size: 11px;
+  color: var(--faint); padding: 2px 6px 4px 0; border-bottom: 1px solid var(--line);
+}
+td {
+  padding: 2px 6px 2px 0; border-bottom: 1px solid var(--line);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums; font-size: 12px; color: var(--dim);
+}
+td.text { font-family: "IBM Plex Sans", system-ui, sans-serif; color: var(--text); }
+td.num { text-align: right; }
+.local { color: var(--local); }
+.api { color: var(--api); }
+.stop { color: var(--stop); }
+.muted { color: var(--faint); }
+.banner {
+  padding: 10px 16px; background: var(--stop); color: var(--base);
+  font-weight: 500; display: none;
+}
+body.halted .banner { display: block; }
+</style>
+</head>
+<body>
+<div class="banner">halted — nothing autonomous is running. Resume when you are ready.</div>
+
+<header>
+  <h1>XOS Mission Control</h1>
+  <span class="muted" id="machine"></span>
+  <span class="spacer"></span>
+  <span class="muted">cost mode</span>
+  <button id="mode-local">aggressive-local</button>
+  <button id="mode-balanced">balanced</button>
+  <button id="mode-quality">best-quality</button>
+  <button class="stop" id="halt">halt</button>
+</header>
+
+<main>
+  <section>
+    <div class="attention" id="attention" style="display:none">
+      <h2>needs you</h2>
+      <div id="attention-items"></div>
+    </div>
+
+    <div class="panel">
+      <h2>goals</h2>
+      <div id="goals"></div>
+    </div>
+
+    <div class="panel">
+      <h2>action journal</h2>
+      <table><thead><tr><th>state</th><th>tool</th><th>path</th></tr></thead>
+      <tbody id="journal"></tbody></table>
+    </div>
+  </section>
+
+  <section>
+    <div class="panel">
+      <h2>spend today, and what it cost to run locally</h2>
+      <div id="spend"></div>
+    </div>
+
+    <div class="panel">
+      <h2>system</h2>
+      <div id="system"></div>
+    </div>
+
+    <div class="panel">
+      <h2>routing</h2>
+      <table><thead><tr><th>trigger</th><th>target</th><th class="num">cost</th></tr></thead>
+      <tbody id="escalations"></tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>security</h2>
+      <table><thead><tr><th>decision</th><th>tool</th><th>reason</th></tr></thead>
+      <tbody id="policy"></tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>memory</h2>
+      <div id="memory"></div>
+    </div>
+
+    <div class="panel">
+      <h2>pulse</h2>
+      <div id="pulse"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+// This page renders what the daemon sends and nothing more. No costs are
+// computed here, no routing is decided here; every number arrives ready.
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c => (
+  {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function row(k, v, cls) {
+  return `<div class="row"><span class="k">${esc(k)}</span>` +
+         `<span class="v ${cls || ""}">${esc(v)}</span></div>`;
+}
+
+async function post(path, body) {
+  await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
+                     body: JSON.stringify(body || {})});
+  refresh();
+}
+
+$("halt").onclick = () => post(document.body.classList.contains("halted")
+  ? "/api/resume" : "/api/halt");
+$("mode-local").onclick   = () => post("/api/mode", {mode: "aggressive-local"});
+$("mode-balanced").onclick = () => post("/api/mode", {mode: "balanced"});
+$("mode-quality").onclick  = () => post("/api/mode", {mode: "best-quality"});
+
+function renderGoals(goals) {
+  if (!goals.length) return `<div class="muted">No goals yet.</div>`;
+  return goals.map(g => {
+    const nodes = g.nodes || [];
+    const done = nodes.filter(n => n.state === "done").length;
+    const rows = nodes.map(n => `
+      <div class="node ${esc(n.state)}">
+        <span class="state">${esc(n.state)}</span>
+        <span>${esc(n.title)}</span>
+      </div>` +
+      (n.result ? `<div class="node ${esc(n.state)}"><span class="state"></span>
+        <span class="result">${esc(String(n.result).slice(0, 160))}</span></div>` : "") +
+      (n.failure && n.state === "failed"
+        ? `<div class="node failed"><span class="state"></span>
+           <span class="result stop">${esc(n.failure)}</span></div>` : "")
+    ).join("");
+    return `<div class="goal">
+      <div class="title"><span class="desc">${esc(g.description)}</span>
+      <span class="v muted">${done}/${nodes.length} · ${esc(g.state)}</span></div>
+      ${rows}</div>`;
+  }).join("");
+}
+
+function renderAttention(goals) {
+  const waiting = [];
+  goals.forEach(g => (g.nodes || []).forEach(n => {
+    if (n.state === "needs-user") waiting.push({goal: g.description, node: n});
+  }));
+  if (!waiting.length) { $("attention").style.display = "none"; return; }
+  $("attention").style.display = "block";
+  $("attention-items").innerHTML = waiting.map(w => `
+    <div class="item">
+      <span>${esc(w.node.title)} <span class="muted">· ${esc(w.goal)}</span></span>
+      <button onclick="post('/api/confirm', {node_id: '${esc(w.node.id)}'})">approve</button>
+    </div>`).join("");
+}
+
+function refresh() {
+  fetch("/api/state").then(r => r.json()).then(s => {
+    document.body.classList.toggle("halted", !!s.halted);
+    $("machine").textContent = s.machine_summary || "";
+    $("goals").innerHTML = renderGoals(s.goals || []);
+    renderAttention(s.goals || []);
+
+    const cap = (s.spend.caps && s.spend.caps.daily_total) || null;
+    const over = cap && s.spend.today >= cap;
+    const near = cap && s.spend.today >= cap * 0.8;
+    $("spend").innerHTML =
+      row("api today", s.spend.today.toFixed(4), over ? "stop" : (near ? "api" : "")) +
+      (cap ? row("daily cap", cap.toFixed(4)) : "") +
+      row("electricity today", s.energy.watt_hours_today.toFixed(1) + " Wh") +
+      row("electricity cost", s.energy.cost_today.toFixed(4) + " (estimate)") +
+      row("cost mode", s.cost_mode);
+
+    const m = s.machine || {};
+    $("system").innerHTML =
+      (m.gpu ? row("gpu", m.gpu.name) +
+               row("gpu load", m.gpu.utilisation_percent + "%") +
+               row("vram", m.gpu.memory_used_mb + " / " + m.gpu.memory_total_mb + " MB")
+             : row("gpu", "not present")) +
+      row("cpu load", m.cpu_load_1m == null ? "-" : m.cpu_load_1m.toFixed(2)) +
+      (m.memory ? row("memory", Math.round(100 - 100 * m.memory.available_mb / m.memory.total_mb) + "% used") : "") +
+      (m.disks || []).map(d => row(d.mount,
+        Math.round(100 - 100 * d.free_gb / d.total_gb) + "% full")).join("") +
+      row("network", m.network && m.network.online
+        ? (m.network.metered ? "metered" : "online") : "offline",
+        m.network && m.network.online ? "" : "stop");
+
+    $("escalations").innerHTML = (s.escalations || []).map(e => `
+      <tr><td class="api">${esc(e.trigger)}</td><td>${esc(e.target_model)}</td>
+      <td class="num">${Number(e.cost).toFixed(4)}</td></tr>`).join("")
+      || `<tr><td colspan="3" class="muted">Nothing has left the machine.</td></tr>`;
+
+    $("policy").innerHTML = (s.policy || []).map(p => `
+      <tr><td class="${p.decision === "block" ? "stop" : (p.decision === "prompt" ? "api" : "local")}">
+      ${esc(p.decision)}</td><td>${esc(p.tool)}</td>
+      <td class="text">${esc(String(p.reason).slice(0, 60))}</td></tr>`).join("")
+      || `<tr><td colspan="3" class="muted">No decisions yet.</td></tr>`;
+
+    $("memory").innerHTML = (s.memory || []).map(t =>
+      row(t.tier, t.entries + " entries")).join("");
+
+    $("journal").innerHTML = (s.journal || []).map(j => `
+      <tr><td class="${j.undone ? "muted" : (j.reversible ? "local" : "api")}">
+      ${esc(j.undone ? "undone" : (j.reversible ? "undoable" : "final"))}</td>
+      <td>${esc(j.tool)}</td><td class="text">${esc(j.path)}</td></tr>`).join("")
+      || `<tr><td colspan="3" class="muted">Nothing has been done yet.</td></tr>`;
+
+    $("pulse").innerHTML =
+      row("tick", "every " + s.pulse.tick_secs + "s") +
+      row("model", s.pulse.model_loaded ? "resident" : "released") +
+      row("idle", s.pulse.idle_secs + "s") +
+      row("scheduled", (s.pulse.tasks || []).length + " tasks, " +
+                       (s.pulse.watchers || []).length + " watchers");
+  }).catch(() => {});
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

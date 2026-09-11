@@ -482,10 +482,7 @@ async fn dispatch(
                 .get("node_id")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            match daemon
-                .graph
-                .set_state(node_id, NodeState::Pending, "confirmed by a person")
-            {
+            match daemon.graph.approve(node_id) {
                 Ok(()) => Some(json!({"node_id": node_id, "state": "pending"})),
                 Err(error) => {
                     let body = failure(request.id.clone(), INVALID_PARAMS, &error);
@@ -1789,9 +1786,17 @@ pub async fn run_eligible(
                 continue;
             }
             PolicyDecision::Prompt { reason } => {
-                let _ = daemon.graph.needs_user(&node.id, reason);
-                ran.push(json!({"node": node.title, "outcome": "needs-user", "reason": reason}));
-                continue;
+                if node.confirmed {
+                    // A person already said yes to this one. Spend the approval
+                    // so it covers this attempt and not every future one.
+                    let _ = daemon.graph.clear_confirmation(&node.id);
+                } else {
+                    let _ = daemon.graph.needs_user(&node.id, reason);
+                    ran.push(
+                        json!({"node": node.title, "outcome": "needs-user", "reason": reason}),
+                    );
+                    continue;
+                }
             }
             _ => {}
         }
