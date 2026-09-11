@@ -1,0 +1,32 @@
+You are building XOS. Work autonomously on exactly one task, then stop.
+
+1. Read CLAUDE.md for architecture context and non-negotiables.
+2. Read BUILD.md. Find the first task whose status is `todo`.
+   - If none, report "BUILD COMPLETE" and stop.
+   - If the task immediately before it is marked GATE and `done`, but its gate has
+     not been signed off in Notes, report "AWAITING GATE REVIEW" and stop.
+3. Mark that task `in-progress` in BUILD.md and commit.
+4. Read its full prompt from PROMPTS.md under the matching ID heading. Read
+   STYLE.md if the task touches any user-facing surface.
+5. Implement it. Follow the prompt's guardrail exactly — it exists to stop you
+   breaking earlier work. Do not implement anything belonging to a later task,
+   however obvious it seems; later prompts assume the boundaries earlier ones set.
+6. Run the prompt's check. If it fails, fix and retry up to three times. On a
+   fourth failure, mark the task `blocked`, write what failed and what you tried
+   to BUILD.md Notes, commit, and stop.
+7. Run `cargo build` and `cargo test` if the workspace exists. Both must pass
+   before the task counts as done.
+8. Mark the task `done` in BUILD.md. Append one or two lines to Notes covering
+   anything a future task needs to know — a deviation, an assumption, an
+   interface decision.
+9. Commit as `feat(<id>): <task name>`.
+10. If the task was marked GATE, print exactly what a human should verify and why,
+    then stop. Otherwise print the next task's name and stop.
+
+Rules:
+- One task per invocation. Never continue to the next.
+- Never edit a file belonging to a completed task unless the current prompt says
+  to. If you believe an earlier task was wrong, write it in Notes and stop.
+- Never modify BUILD.md's task list or gate markers.
+- If a prompt is ambiguous, choose the option most consistent with CLAUDE.md's
+  non-negotiables and record the choice in Notes.
