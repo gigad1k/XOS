@@ -17,7 +17,7 @@
 | 13 | P11 | Status bar and desktop theme | done | |
 | 14 | P12 | Mission Control | done | |
 | 15 | HW-1 | Hardware detection | done | |
-| 16 | HW-2 | Driver resolution and installation | todo | *GATE* |
+| 16 | HW-2 | Driver resolution and installation | in-progress | *GATE* |
 | 17 | P13 | Installer | todo | *GATE* |
 | 18 | P14 | First-run experience and first goal | todo | |
 
