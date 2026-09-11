@@ -82,6 +82,11 @@ pub struct Usage {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Token {
     pub text: String,
+    /// The model's own log probability for this token, when the endpoint
+    /// reports it. Used to judge confidence from the probabilities rather than
+    /// by asking the model how sure it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logprob: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

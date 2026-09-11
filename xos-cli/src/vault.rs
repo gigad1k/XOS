@@ -160,3 +160,61 @@ fn read_secret(prompt: &str) -> Result<String, String> {
         Err(error) => Err(error),
     }
 }
+
+/// `xos escalations` — what left the machine, and why.
+pub fn escalations(connection: &mut Connection, limit: u32) -> Result<String, String> {
+    let result = connection.call("escalations.list", json!({"limit": limit}))?;
+    let entries = result
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if entries.is_empty() {
+        let _ = writeln!(out, "No escalations recorded. Everything has stayed local.");
+        return Ok(out);
+    }
+
+    let _ = writeln!(
+        out,
+        "{:<18} {:<16} {:<10} {:>7} {:>7} {:>9}  {}",
+        "trigger", "target", "class", "in", "out", "cost", "reason"
+    );
+    for entry in &entries {
+        let text = |key: &str| {
+            entry
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+                .to_string()
+        };
+        let number = |key: &str| entry.get(key).and_then(Value::as_i64).unwrap_or(0);
+        let _ = writeln!(
+            out,
+            "{:<18} {:<16} {:<10} {:>7} {:>7} {:>9.4}  {}",
+            text("trigger"),
+            text("target_model"),
+            text("task_class"),
+            number("tokens_in"),
+            number("tokens_out"),
+            entry.get("cost").and_then(Value::as_f64).unwrap_or(0.0),
+            text("reason"),
+        );
+    }
+    Ok(out)
+}
+
+/// `xos mode` — read or set the cost mode.
+pub fn mode(connection: &mut Connection, wanted: Option<&str>) -> Result<String, String> {
+    let result = match wanted {
+        Some(mode) => connection.call("mode.set", json!({"mode": mode}))?,
+        None => connection.call("mode.get", json!({}))?,
+    };
+    let mode = result.get("mode").and_then(Value::as_str).unwrap_or("unknown");
+    Ok(match wanted {
+        Some(_) => format!("Cost mode set to {}.\n", mode),
+        None => format!("{}\n", mode),
+    })
+}

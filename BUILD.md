@@ -7,7 +7,7 @@
 | 3 | P2 | xosd skeleton, provider trait, halt primitive | done | |
 | 4 | P3 | xos chat TUI | done | |
 | 5 | P4 | XOS Vault and cloud providers | done | |
-| 6 | P5 | Router and escalation log | in-progress | *GATE* |
+| 6 | P5 | Router and escalation log | done | *GATE* |
 | 7 | P6 | XOS Memory, export and import | todo | |
 | 8 | P7 | Policy engine and egress protection | todo | *GATE* |
 | 9 | P7b | Action journal and undo | todo | *GATE* |
@@ -142,3 +142,32 @@ real disks.
   max_tokens, and has not been run against the real API.
 - P3's TUI reaches cloud providers unchanged, since it asks the daemon which
   provider is default and renders the tier colour from the capabilities.
+
+- P5 — done. Check passed: all eight triggers were forced against a live model
+  and each appears in `xos escalations` with the correct trigger and a reason
+  that names the numbers. Throughput and low-confidence fired mid-stream, the
+  other six before the request left.
+- P5 GATE — the thresholds are placeholders until P1's measurement runs on the
+  target box. `tokens_per_second_floor` 6.0, `min_mean_logprob` -1.0,
+  `tool_complexity_threshold` 3 and `context_headroom` 0.8 are reasoned guesses,
+  not measurements. A Gemma 4 E4B run on the GTX 1080 should set them, and the
+  ~85% and ~70% tool-call figures decide whether the defaults hold at all.
+- The check found a real flaw rather than confirming the code. Low confidence
+  was firing on the first token, because the throughput trigger needs a window
+  of at least a second before a rate can be computed and so fell through to the
+  logprob check, which had a sample of one. Escalating on one token's
+  probability is a coin flip, not a measurement. Confidence now needs
+  `min_logprob_samples` tokens, default 8, before it can fire at all.
+- Ollama does return logprobs on its OpenAI endpoint, so trigger 6 is exercised
+  against real probabilities rather than a stub.
+- Mid-stream escalation stops the local reply and re-runs on the API tier,
+  emitting a `complete.escalated` notification first. Known rough edge: P3's TUI
+  does not yet act on that notification, so a mid-stream escalation shows the
+  abandoned local fragment followed by the API reply. P3 is a completed task and
+  the driver forbids editing it here; P11 or P12 should handle the notification.
+- `xos mode` writes to a state file rather than rewriting `config.toml`, so a
+  runtime change never reformats a hand-edited file or drops its comments. The
+  config supplies the default; the state file overrides it.
+- Routing lives only in the router module. Providers were not told about tiers,
+  and the Provider trait is unchanged. `Token` gained an optional `logprob`,
+  which is the only way the model's own probabilities can reach the router.

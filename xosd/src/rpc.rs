@@ -8,7 +8,8 @@
 //! dependable: a halt arriving while a completion runs is handled on a fresh
 //! task, and halting takes no lock that the completion could be holding.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -17,6 +18,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, info, warn};
 
 use crate::providers::{CompletionRequest, ProviderRegistry};
+use crate::router::log::{EscalationLog, Record};
+use crate::router::{self, CostMode, Observation, Router, Tier};
 use crate::spend::{cost_of, SpendBook};
 use crate::state::Halt;
 use crate::vault::Vault;
@@ -55,6 +58,10 @@ pub struct Daemon {
     pub default_provider: String,
     pub vault: Arc<Vault>,
     pub spend: Arc<SpendBook>,
+    /// Behind a lock only because `xos mode` can change it at runtime. Routing
+    /// itself takes a read, which never blocks another completion.
+    pub router: RwLock<Router>,
+    pub escalations: Arc<EscalationLog>,
     pub version: &'static str,
 }
 
@@ -65,6 +72,8 @@ impl Daemon {
         default_provider: String,
         vault: Arc<Vault>,
         spend: Arc<SpendBook>,
+        router: Router,
+        escalations: Arc<EscalationLog>,
     ) -> Self {
         Self {
             registry,
@@ -72,8 +81,17 @@ impl Daemon {
             default_provider,
             vault,
             spend,
+            router: RwLock::new(router),
+            escalations,
             version: env!("CARGO_PKG_VERSION"),
         }
+    }
+
+    fn cost_mode(&self) -> CostMode {
+        self.router
+            .read()
+            .map(|router| router.config().cost_mode)
+            .unwrap_or_default()
     }
 
     /// Providers with their availability folded in, so a caller can see which
@@ -176,6 +194,7 @@ async fn dispatch(
         "status" => Some(json!({
             "version": daemon.version,
             "halted": daemon.halt.is_halted(),
+            "cost_mode": daemon.cost_mode().label(),
             "default_provider": daemon.default_provider,
             "providers": daemon.provider_report(),
             "halt_state_path": daemon.halt.state_path().display().to_string(),
@@ -254,6 +273,66 @@ async fn dispatch(
             }
         }
 
+        "escalations.list" => {
+            let limit = request
+                .params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20) as u32;
+            match daemon.escalations.recent(limit) {
+                Ok(entries) => Some(json!({"entries": entries})),
+                Err(error) => {
+                    let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "mode.get" => Some(json!({"mode": daemon.cost_mode().label()})),
+
+        "mode.set" => {
+            let wanted = request
+                .params
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match CostMode::parse(wanted) {
+                Some(mode) => {
+                    {
+                        // Scoped tightly: the guard must not outlive this block.
+                        if let Ok(mut router) = daemon.router.write() {
+                            router.set_cost_mode(mode);
+                        }
+                    }
+                    match crate::config::write_mode(mode) {
+                        Ok(()) => {
+                            info!(mode = mode.label(), "cost mode set");
+                            Some(json!({"mode": mode.label()}))
+                        }
+                        Err(error) => {
+                            let body = failure(
+                                request.id.clone(),
+                                INTERNAL_ERROR,
+                                &format!("the mode is set, but was not remembered: {}", error),
+                            );
+                            let _ = write_line(writer, &body).await;
+                            None
+                        }
+                    }
+                }
+                None => {
+                    let body = failure(
+                        request.id.clone(),
+                        INVALID_PARAMS,
+                        "modes are aggressive-local, balanced and best-quality",
+                    );
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
         "spend.report" => {
             let days = request
                 .params
@@ -323,10 +402,29 @@ async fn dispatch(
 
 #[derive(Debug, Deserialize)]
 struct CompleteParams {
+    /// Naming a provider bypasses routing entirely.
     #[serde(default)]
     provider: Option<String>,
+    /// Ask for the API tier outright. Never throttled.
+    #[serde(default)]
+    escalate: bool,
+    /// What the caller already knows about the work, when it knows.
+    #[serde(default)]
+    task_class: Option<router::TaskClass>,
+    /// Local attempts that already failed schema validation.
+    #[serde(default)]
+    schema_failures: u32,
     #[serde(flatten)]
     request: CompletionRequest,
+}
+
+/// What one streaming attempt produced.
+struct Attempt {
+    text: String,
+    finish_reason: Option<String>,
+    usage: Option<crate::providers::Usage>,
+    /// Set when the router asked to move tiers partway through.
+    escalation: Option<crate::router::Decision>,
 }
 
 async fn complete(
@@ -354,93 +452,111 @@ async fn complete(
         }
     };
 
-    let name = params
-        .provider
-        .clone()
-        .unwrap_or_else(|| daemon.default_provider.clone());
-    let provider = match daemon.registry.get(&name) {
-        Some(provider) => provider,
-        None => {
-            let body = failure(
-                request.id.clone(),
-                INVALID_PARAMS,
-                &format!("no provider named `{}`", name),
-            );
-            let _ = write_line(writer, &body).await;
-            return None;
-        }
-    };
-
-    // Checked before the request rather than during it, so a cap never
-    // interrupts a reply that is already streaming.
-    if let Some(reason) = daemon.spend.availability(&name).reason() {
-        let body = failure(request.id.clone(), OVER_CAP, &reason);
-        let _ = write_line(writer, &body).await;
-        return None;
-    }
-
-    let mut stream = match provider.complete(params.request).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            let body = failure(request.id.clone(), INTERNAL_ERROR, &error.to_string());
-            let _ = write_line(writer, &body).await;
-            return None;
-        }
-    };
-
-    let mut halted = daemon.halt.subscribe();
-    let mut text = String::new();
-    let mut finish_reason = None;
-    let mut usage = None;
-
-    loop {
-        tokio::select! {
-            // Halt wins the race by construction: it is checked on every
-            // iteration and needs no lock the stream could be holding.
-            _ = halted.recv() => {
-                let body = failure(
-                    request.id.clone(),
-                    HALTED,
-                    "halted mid-completion",
-                );
+    // Routing happens here and only here. Providers know nothing about tiers.
+    // One snapshot, taken without holding the lock across any await.
+    let snapshot = daemon.router.read().ok().map(|router| router.clone());
+    let routing = {
+        let router = match snapshot.as_ref() {
+            Some(router) => router,
+            None => {
+                let body = failure(request.id.clone(), INTERNAL_ERROR, "the router is unavailable");
                 let _ = write_line(writer, &body).await;
                 return None;
             }
-            next = futures_util::StreamExt::next(&mut stream) => {
-                match next {
-                    Some(Ok(token)) => {
-                        if !token.text.is_empty() {
-                            text.push_str(&token.text);
-                            let note = json!({
-                                "jsonrpc": "2.0",
-                                "method": "complete.delta",
-                                "params": {"id": request.id, "text": token.text}
-                            });
-                            if write_line(writer, &note).await.is_err() {
-                                return None;
-                            }
-                        }
-                        if token.finish_reason.is_some() {
-                            finish_reason = token.finish_reason;
-                        }
-                        if token.usage.is_some() {
-                            usage = token.usage;
-                        }
-                    }
-                    Some(Err(error)) => {
-                        let body = failure(request.id.clone(), INTERNAL_ERROR, &error.to_string());
-                        let _ = write_line(writer, &body).await;
-                        return None;
-                    }
-                    None => break,
+        };
+        let prompt = params
+            .request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .map(|message| message.content.clone())
+            .unwrap_or_default();
+        let whole: String = params
+            .request
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let decision = router.route(&router::Request {
+            prompt,
+            task_class: params.task_class,
+            tools_offered: params.request.tools.len(),
+            estimated_tokens: router::estimate_tokens(&whole),
+            schema_failures: params.schema_failures,
+            manual: params.escalate,
+        });
+        let local = router.config().local.clone();
+        let api = router.config().api.clone();
+        (decision, local, api)
+    };
+    let (decision, local_name, api_name) = routing;
+
+    // An explicitly named provider wins: the caller has already decided.
+    let mut name = match (&params.provider, decision.tier) {
+        (Some(explicit), _) => explicit.clone(),
+        (None, Tier::Api) => match &api_name {
+            Some(api) => api.clone(),
+            None => local_name.clone(),
+        },
+        (None, Tier::Local) => local_name.clone(),
+    };
+    if params.provider.is_none() && decision.escalated() {
+        info!(
+            trigger = decision.trigger.map(|t| t.label()).unwrap_or("none"),
+            reason = %decision.reason,
+            target = %name,
+            "escalating to the API tier"
+        );
+    }
+
+    let mut escalated_by = if params.provider.is_none() && decision.escalated() {
+        decision.trigger
+    } else {
+        None
+    };
+    let mut escalation_reason = decision.reason.clone();
+
+    let mut attempt = match run_attempt(request, daemon, &name, &params, &decision, writer).await {
+        Ok(attempt) => attempt,
+        Err(()) => return None,
+    };
+
+    // A mid-stream escalation: stop the local reply and run the API tier.
+    if let Some(mid) = attempt.escalation.clone() {
+        if let Some(api) = &api_name {
+            let note = json!({
+                "jsonrpc": "2.0",
+                "method": "complete.escalated",
+                "params": {
+                    "id": request.id,
+                    "trigger": mid.trigger.map(|t| t.label()),
+                    "reason": mid.reason,
                 }
+            });
+            if write_line(writer, &note).await.is_err() {
+                return None;
             }
+            escalated_by = mid.trigger;
+            escalation_reason = mid.reason.clone();
+            name = api.clone();
+            attempt = match run_attempt(request, daemon, &name, &params, &decision, writer).await {
+                Ok(attempt) => attempt,
+                Err(()) => return None,
+            };
         }
     }
 
-    // Record what it cost before replying, so a cap reflects this call too.
+    let provider = match daemon.registry.get(&name) {
+        Some(provider) => provider,
+        None => return None,
+    };
     let capabilities = provider.capabilities();
-    let charged = usage.map(|usage| {
+
+    // Record what it cost before replying, so a cap reflects this call too.
+    let charged = attempt.usage.map(|usage| {
         let cost = cost_of(
             usage.input_tokens,
             usage.output_tokens,
@@ -457,13 +573,172 @@ async fn complete(
         cost
     });
 
+    // Every escalation is auditable, with the trigger that caused it.
+    if let Some(trigger) = escalated_by {
+        let usage = attempt.usage.unwrap_or_default();
+        let entry = Record {
+            trigger,
+            task_class: decision.task_class,
+            local_model: local_name.clone(),
+            target_model: name.clone(),
+            tokens_in: usage.input_tokens,
+            tokens_out: usage.output_tokens,
+            cost: charged.unwrap_or(0.0),
+            outcome: if attempt.text.is_empty() {
+                "empty".to_string()
+            } else {
+                "ok".to_string()
+            },
+            reason: escalation_reason.clone(),
+        };
+        if let Err(error) = daemon.escalations.record(&entry) {
+            warn!(%error, "the escalation happened but was not logged");
+        }
+    }
+
     Some(json!({
         "provider": name,
-        "text": text,
-        "finish_reason": finish_reason,
-        "usage": usage,
+        "text": attempt.text,
+        "finish_reason": attempt.finish_reason,
+        "usage": attempt.usage,
         "cost": charged,
+        "escalated": escalated_by.map(|t| t.label()),
+        "task_class": decision.task_class.label(),
     }))
+}
+
+/// Stream one provider's reply, watching whether the router wants to move.
+///
+/// `Err(())` means a reply was already written and the caller should stop.
+async fn run_attempt(
+    request: &Request,
+    daemon: &Arc<Daemon>,
+    name: &str,
+    params: &CompleteParams,
+    decision: &crate::router::Decision,
+    writer: &mut (impl AsyncWriteExt + Unpin + Send),
+) -> Result<Attempt, ()> {
+    let provider = match daemon.registry.get(name) {
+        Some(provider) => provider,
+        None => {
+            let body = failure(
+                request.id.clone(),
+                INVALID_PARAMS,
+                &format!("no provider named `{}`", name),
+            );
+            let _ = write_line(writer, &body).await;
+            return Err(());
+        }
+    };
+
+    // Checked before the request rather than during it, so a cap never
+    // interrupts a reply that is already streaming.
+    if let Some(reason) = daemon.spend.availability(name).reason() {
+        let body = failure(request.id.clone(), OVER_CAP, &reason);
+        let _ = write_line(writer, &body).await;
+        return Err(());
+    }
+
+    let mut stream = match provider.complete(params.request.clone()).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            let body = failure(request.id.clone(), INTERNAL_ERROR, &error.to_string());
+            let _ = write_line(writer, &body).await;
+            return Err(());
+        }
+    };
+
+    let local_tier = provider.capabilities().local;
+    // Cloned up front: holding the lock across an await would make this future
+    // non-Send, and a completion must never pin the router anyway.
+    let watcher = if local_tier {
+        daemon.router.read().ok().map(|router| router.clone())
+    } else {
+        None
+    };
+    let mut halted = daemon.halt.subscribe();
+    let mut attempt = Attempt {
+        text: String::new(),
+        finish_reason: None,
+        usage: None,
+        escalation: None,
+    };
+    let started = Instant::now();
+    let mut tokens = 0u32;
+    let mut logprob_total = 0f32;
+    let mut logprob_count = 0u32;
+    let mut first_token_seen = false;
+
+    loop {
+        tokio::select! {
+            // Halt wins the race by construction: it is checked on every
+            // iteration and needs no lock the stream could be holding.
+            _ = halted.recv() => {
+                let body = failure(request.id.clone(), HALTED, "halted mid-completion");
+                let _ = write_line(writer, &body).await;
+                return Err(());
+            }
+            next = futures_util::StreamExt::next(&mut stream) => {
+                match next {
+                    Some(Ok(token)) => {
+                        if !token.text.is_empty() {
+                            first_token_seen = true;
+                            tokens += 1;
+                            attempt.text.push_str(&token.text);
+                            let note = json!({
+                                "jsonrpc": "2.0",
+                                "method": "complete.delta",
+                                "params": {"id": request.id, "text": token.text}
+                            });
+                            if write_line(writer, &note).await.is_err() {
+                                return Err(());
+                            }
+                        }
+                        if let Some(logprob) = token.logprob {
+                            logprob_total += logprob;
+                            logprob_count += 1;
+                        }
+                        if token.finish_reason.is_some() {
+                            attempt.finish_reason = token.finish_reason;
+                        }
+                        if token.usage.is_some() {
+                            attempt.usage = token.usage;
+                        }
+
+                        // Only a local reply is worth moving; the API tier is
+                        // already the destination.
+                        if let (Some(watcher), None) = (&watcher, &attempt.escalation) {
+                            let observation = Observation {
+                                elapsed: started.elapsed(),
+                                tokens,
+                                first_token_seen,
+                                mean_logprob: if logprob_count > 0 {
+                                    Some(logprob_total / logprob_count as f32)
+                                } else {
+                                    None
+                                },
+                                logprob_samples: logprob_count,
+                                schema_failed: false,
+                            };
+                            attempt.escalation =
+                                watcher.reconsider(decision.task_class, &observation);
+                            if attempt.escalation.is_some() {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Err(error)) => {
+                        let body = failure(request.id.clone(), INTERNAL_ERROR, &error.to_string());
+                        let _ = write_line(writer, &body).await;
+                        return Err(());
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    Ok(attempt)
 }
 
 fn failure(id: Option<Value>, code: i32, message: &str) -> Value {

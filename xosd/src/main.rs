@@ -28,6 +28,8 @@ use providers::anthropic::AnthropicProvider;
 use providers::llama_cpp::LlamaCppProvider;
 use providers::openai::OpenAiCompatibleProvider;
 use providers::ProviderRegistry;
+use router::log::EscalationLog;
+use router::Router;
 use rpc::Daemon;
 use spend::SpendBook;
 use state::Halt;
@@ -143,12 +145,39 @@ async fn run() -> Result<(), String> {
         .map_err(|e| format!("cannot listen on {}: {}", socket_path.display(), e))?;
     info!(socket = %socket_path.display(), "xosd listening");
 
+    // The router needs the local model's window to judge context overflow.
+    let local_context_window = registry
+        .get(&config.router.local)
+        .map(|provider| provider.capabilities().context_window)
+        .unwrap_or(8192);
+
+    let mut router_config = config.router.clone();
+    router_config.cost_mode = config::effective_mode(config.router.clone());
+    if router_config.api.is_none() {
+        info!("no API tier is configured, so nothing will escalate");
+    } else {
+        info!(
+            local = %router_config.local,
+            api = router_config.api.as_deref().unwrap_or("none"),
+            mode = router_config.cost_mode.label(),
+            "router ready"
+        );
+    }
+    let router = Router::new(router_config, local_context_window);
+
+    let escalations = Arc::new(
+        EscalationLog::open(&config::escalations_path())
+            .map_err(|e| format!("escalation log: {}", e))?,
+    );
+
     let daemon = Arc::new(Daemon::new(
         registry,
         Arc::clone(&halt),
         config.default_provider.clone(),
         vault,
         spend,
+        router,
+        escalations,
     ));
 
     tokio::select! {

@@ -151,6 +151,7 @@ fn anthropic_token(event: &Value) -> Option<Token> {
             }
             Some(Token {
                 text: text.to_string(),
+                logprob: None,
                 finish_reason: None,
                 usage: None,
             })
@@ -160,6 +161,7 @@ fn anthropic_token(event: &Value) -> Option<Token> {
             let usage = event.pointer("/message/usage")?;
             Some(Token {
                 text: String::new(),
+                logprob: None,
                 finish_reason: None,
                 usage: Some(Usage {
                     input_tokens: usage
@@ -189,6 +191,7 @@ fn anthropic_token(event: &Value) -> Option<Token> {
             }
             Some(Token {
                 text: String::new(),
+                logprob: None,
                 finish_reason,
                 usage: Some(Usage {
                     input_tokens: 0,

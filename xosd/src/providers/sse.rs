@@ -80,11 +80,17 @@ pub fn openai_token(event: &Value) -> Option<Token> {
         .unwrap_or_default()
         .to_string();
 
+    let logprob = event
+        .pointer("/choices/0/logprobs/content/0/logprob")
+        .and_then(Value::as_f64)
+        .map(|value| value as f32);
+
     if text.is_empty() && finish_reason.is_none() && usage.is_none() {
         return None;
     }
     Some(Token {
         text,
+        logprob,
         finish_reason,
         usage,
     })
@@ -115,6 +121,20 @@ mod tests {
         let usage = token.usage.expect("usage");
         assert_eq!(usage.input_tokens, 12);
         assert_eq!(usage.output_tokens, 7);
+    }
+
+    #[test]
+    fn a_logprob_is_read_when_the_endpoint_reports_one() {
+        let event = json!({"choices":[{"delta":{"content":"x"},
+                           "logprobs":{"content":[{"logprob":-0.35}]}}]});
+        let token = openai_token(&event).expect("a token");
+        assert!((token.logprob.expect("logprob") + 0.35).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_missing_logprob_is_simply_absent() {
+        let event = json!({"choices":[{"delta":{"content":"x"}}]});
+        assert!(openai_token(&event).expect("a token").logprob.is_none());
     }
 
     #[test]

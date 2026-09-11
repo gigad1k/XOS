@@ -37,6 +37,17 @@ enum Command {
     /// Manage API credentials. Keys are stored by the daemon, never by this client.
     #[command(subcommand)]
     Vault(VaultCommand),
+    /// Show recent escalations from local to the API tier.
+    Escalations {
+        /// How many to show.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Read or set the cost mode: aggressive-local, balanced, best-quality.
+    Mode {
+        /// Leave empty to report the current mode.
+        mode: Option<String>,
+    },
     /// Report what each provider has cost, by day.
     Spend {
         /// How many days back to report.
@@ -85,6 +96,8 @@ fn main() -> std::process::ExitCode {
         Command::Resume => resume(&mut connection),
         Command::Status => status(&mut connection),
         Command::Spend { days } => vault::spend(&mut connection, days),
+        Command::Escalations { limit } => vault::escalations(&mut connection, limit),
+        Command::Mode { mode } => vault::mode(&mut connection, mode.as_deref()),
         Command::Vault(command) => match command {
             VaultCommand::Add { provider } => vault::add(&mut connection, &provider),
             VaultCommand::List => vault::list(&mut connection),

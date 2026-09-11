@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::providers::anthropic::AnthropicConfig;
 use crate::providers::llama_cpp::LlamaCppConfig;
 use crate::providers::openai::OpenAiConfig;
+use crate::router::RouterConfig;
 use crate::spend::Caps;
 
 pub const SYSTEM_SOCKET: &str = "/run/xosd.sock";
@@ -44,6 +45,9 @@ pub struct Config {
     /// rather than failing partway through a reply.
     #[serde(default)]
     pub caps: Caps,
+    /// Which tier serves what, and the thresholds that move a request.
+    #[serde(default)]
+    pub router: RouterConfig,
 }
 
 fn default_socket() -> PathBuf {
@@ -66,6 +70,7 @@ impl Default for Config {
             default_provider: default_provider_name(),
             providers,
             caps: Caps::default(),
+            router: RouterConfig::default(),
         }
     }
 }
@@ -85,6 +90,27 @@ pub fn vault_dir() -> PathBuf {
         .join("xos")
 }
 
+/// The escalation log database.
+pub fn escalations_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("escalations.db")
+}
+
+/// Where a runtime cost-mode override is remembered.
+///
+/// The config file gives the default. `xos mode` writes here instead of
+/// rewriting the config, so a runtime change never reformats a file a person
+/// hand-edited or drops their comments.
+pub fn mode_state_path() -> PathBuf {
+    dirs::state_dir()
+        .or_else(|| dirs::data_local_dir())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("mode")
+}
+
 /// The spend database.
 pub fn spend_path() -> PathBuf {
     dirs::data_local_dir()
@@ -100,6 +126,25 @@ pub fn halt_state_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("xos")
         .join("halted")
+}
+
+/// The cost mode in force: the runtime override if one was set, else the
+/// config's own value.
+pub fn effective_mode(configured: RouterConfig) -> crate::router::CostMode {
+    let path = mode_state_path();
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| crate::router::CostMode::parse(&text))
+        .unwrap_or(configured.cost_mode)
+}
+
+/// Remember a runtime cost mode, without touching the config file.
+pub fn write_mode(mode: crate::router::CostMode) -> io::Result<()> {
+    let path = mode_state_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, format!("{}\n", mode.label()))
 }
 
 impl Config {

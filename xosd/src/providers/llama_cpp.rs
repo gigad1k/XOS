@@ -130,6 +130,9 @@ impl LlamaCppProvider {
             "messages": messages,
             "stream": true,
             "stream_options": {"include_usage": true},
+            // The router judges confidence from these. Endpoints that do not
+            // support them ignore the field and the trigger simply never fires.
+            "logprobs": true,
         });
         if let Some(temperature) = request.temperature {
             body["temperature"] = json!(temperature);
