@@ -13,7 +13,7 @@
 | 9 | P7b | Action journal and undo | done | *GATE* |
 | 10 | P8 | Supervisor | done | |
 | 11 | P9 | XOS Goals, the task graph | done | |
-| 12 | P10 | XOS Pulse and power management | todo | |
+| 12 | P10 | XOS Pulse and power management | in-progress | |
 | 13 | P11 | Status bar and desktop theme | todo | |
 | 14 | P12 | Mission Control | todo | |
 | 15 | HW-1 | Hardware detection | todo | |
