@@ -16,7 +16,7 @@
 | 12 | P10 | XOS Pulse and power management | done | |
 | 13 | P11 | Status bar and desktop theme | done | |
 | 14 | P12 | Mission Control | done | |
-| 15 | HW-1 | Hardware detection | todo | |
+| 15 | HW-1 | Hardware detection | in-progress | |
 | 16 | HW-2 | Driver resolution and installation | todo | *GATE* |
 | 17 | P13 | Installer | todo | *GATE* |
 | 18 | P14 | First-run experience and first goal | todo | |
