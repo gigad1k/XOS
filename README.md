@@ -51,3 +51,8 @@ cargo run --bin xos
 ## Licence
 
 MIT. See `LICENSE`.
+
+## The manual
+
+[docs/manual.md](docs/manual.md) — installing, running, supervising and stopping XOS.
+Every command in it is checked against the binary by `docs/manual.test.sh`.
