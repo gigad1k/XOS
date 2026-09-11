@@ -12,7 +12,7 @@
 | 8 | P7 | Policy engine and egress protection | done | *GATE* |
 | 9 | P7b | Action journal and undo | done | *GATE* |
 | 10 | P8 | Supervisor | done | |
-| 11 | P9 | XOS Goals, the task graph | in-progress | |
+| 11 | P9 | XOS Goals, the task graph | done | |
 | 12 | P10 | XOS Pulse and power management | todo | |
 | 13 | P11 | Status bar and desktop theme | todo | |
 | 14 | P12 | Mission Control | todo | |
@@ -290,3 +290,30 @@ real disks.
 - Unverified: prompt compilation was exercised against a stand-in endpoint, not a
   real cloud model, so the quality of a compiled prompt is untested. The
   machinery around it — caching, scoring, adoption, rejection — is.
+
+- P9 — done. Check passed: a goal was decomposed by the supervisor into three
+  dependency-ordered steps, the nodes ran on the local model, xosd was killed
+  with SIGKILL part-way through, and after restart the graph was consistent and
+  carried on to done.
+- A deadlock was found and fixed before the check could run at all. `plan` still
+  held the graph mutex when it called `refresh_blocked`, which takes the same
+  lock; std's Mutex is not reentrant, so it hung. It hung the tests here, and it
+  would have hung the daemon on the first goal anyone created.
+- Recovery is on open as well as on demand: a node left `running` by a crash is
+  set back to `pending`, because a process that died is not still working. The
+  live kill happened to land between nodes rather than inside one, so the
+  recovery path itself is proven by unit test rather than by that run.
+- Conditions hold a node back rather than failing it. A node wanting AC power on
+  a machine running on battery simply is not eligible, so it does not burn its
+  retry budget on something that was never wrong. Anything unreadable is treated
+  as permitting work, because a desktop has no mains supply to read and refusing
+  to work there would be worse.
+- The tier split is enforced by structure, not discipline: the graph module holds
+  no provider handle, so a node cannot reach a model without going through the
+  daemon, which applies the policy engine and the router first. Decomposition and
+  re-planning are supervisor work; execution and summarising are local.
+- A re-plan replaces unfinished nodes and keeps finished ones, so re-planning a
+  goal does not throw away work already done.
+- Model quality note, not a code issue: llama3.2 answered the third step with
+  something about renewable energy. On the target box this is Gemma 4 E4B's job,
+  and a node's result is worth reading before trusting it.

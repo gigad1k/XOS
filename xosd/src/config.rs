@@ -151,6 +151,14 @@ pub fn vault_dir() -> PathBuf {
         .join("xos")
 }
 
+/// The task graph.
+pub fn graph_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("graph.db")
+}
+
 /// The compiled prompt cache.
 pub fn prompts_path() -> PathBuf {
     dirs::data_local_dir()

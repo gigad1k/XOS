@@ -51,6 +51,9 @@ enum Command {
     /// Search, inspect and promote what XOS remembers.
     #[command(subcommand)]
     Memory(MemoryCommand),
+    /// Declare and follow long-running goals.
+    #[command(subcommand)]
+    Goal(GoalCommand),
     /// Reverse the last actions XOS took.
     Undo {
         #[arg(long, default_value_t = 1)]
@@ -80,6 +83,21 @@ enum Command {
         /// How many days back to report.
         #[arg(long, default_value_t = 7)]
         days: u32,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum GoalCommand {
+    /// Declare a goal. The supervisor breaks it into steps.
+    New { description: Vec<String> },
+    /// List every goal and its state.
+    List,
+    /// Show one goal's steps and what they produced.
+    Show { goal_id: String },
+    /// Run whatever steps are eligible right now.
+    Advance {
+        #[arg(long, default_value_t = 1)]
+        limit: u32,
     },
 }
 
@@ -186,6 +204,14 @@ fn main() -> std::process::ExitCode {
         Command::Journal { goal, tool, limit } => {
             vault::journal(&mut connection, goal.as_deref(), tool.as_deref(), limit)
         }
+        Command::Goal(command) => match command {
+            GoalCommand::New { description } => {
+                vault::goal_new(&mut connection, &description.join(" "))
+            }
+            GoalCommand::List => vault::goal_list(&mut connection),
+            GoalCommand::Show { goal_id } => vault::goal_show(&mut connection, &goal_id),
+            GoalCommand::Advance { limit } => vault::goal_advance(&mut connection, limit),
+        },
         Command::Supervisor(command) => match command {
             SupervisorCommand::Log { limit } => vault::supervisor_log(&mut connection, limit),
             SupervisorCommand::Prompts => vault::supervisor_prompts(&mut connection),

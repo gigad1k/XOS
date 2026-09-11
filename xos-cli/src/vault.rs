@@ -645,3 +645,136 @@ pub fn supervisor_log(connection: &mut Connection, limit: u32) -> Result<String,
     }
     Ok(out)
 }
+
+/// `xos goal new`
+pub fn goal_new(connection: &mut Connection, description: &str) -> Result<String, String> {
+    let result = connection.call("graph.create_goal", json!({"description": description}))?;
+    let goal_id = result.get("goal_id").and_then(Value::as_str).unwrap_or("-");
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if result.get("planned").and_then(Value::as_bool).unwrap_or(false)
+        || result.get("nodes").is_some()
+    {
+        let _ = writeln!(
+            out,
+            "Goal {} created with {} steps. Run `xos goal show {}` to see them.",
+            goal_id,
+            result.get("nodes").and_then(Value::as_i64).unwrap_or(0),
+            goal_id
+        );
+    } else {
+        let _ = writeln!(out, "Goal {} created, but not yet planned.", goal_id);
+        if let Some(reason) = result.get("reason").and_then(Value::as_str) {
+            let _ = writeln!(out, "{}", reason);
+        }
+        if let Some(supervisor) = result.get("supervisor") {
+            if let Some(reason) = supervisor.get("reason").and_then(Value::as_str) {
+                let _ = writeln!(out, "{}", reason);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// `xos goal list`
+pub fn goal_list(connection: &mut Connection) -> Result<String, String> {
+    let result = connection.call("graph.list", json!({}))?;
+    let goals = result
+        .get("goals")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if goals.is_empty() {
+        let _ = writeln!(out, "No goals yet. Start one with `xos goal new \"...\"`.");
+        return Ok(out);
+    }
+    let _ = writeln!(out, "{:<18} {:<14}  {}", "id", "state", "goal");
+    for goal in &goals {
+        let _ = writeln!(
+            out,
+            "{:<18} {:<14}  {}",
+            goal.get("id").and_then(Value::as_str).unwrap_or("-"),
+            goal.get("state").and_then(Value::as_str).unwrap_or("-"),
+            goal.get("description").and_then(Value::as_str).unwrap_or("")
+        );
+    }
+    Ok(out)
+}
+
+/// `xos goal show`
+pub fn goal_show(connection: &mut Connection, goal_id: &str) -> Result<String, String> {
+    let result = connection.call("graph.status", json!({"goal_id": goal_id}))?;
+    let goal = result.get("goal").cloned().unwrap_or(Value::Null);
+    let nodes = result
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{}  {}",
+        goal.get("id").and_then(Value::as_str).unwrap_or("-"),
+        goal.get("description").and_then(Value::as_str).unwrap_or("")
+    );
+    let _ = writeln!(
+        out,
+        "state  {}",
+        goal.get("state").and_then(Value::as_str).unwrap_or("-")
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "{:<12} {:>8}  {}", "state", "attempts", "step");
+    for node in &nodes {
+        let _ = writeln!(
+            out,
+            "{:<12} {:>8}  {}",
+            node.get("state").and_then(Value::as_str).unwrap_or("-"),
+            node.get("attempts").and_then(Value::as_i64).unwrap_or(0),
+            node.get("title").and_then(Value::as_str).unwrap_or("")
+        );
+        if let Some(result) = node.get("result").and_then(Value::as_str) {
+            let one_line: String = result.split('\n').collect::<Vec<_>>().join(" ");
+            let _ = writeln!(out, "{:<12} {:>8}  {}", "", "", one_line.chars().take(100).collect::<String>());
+        }
+    }
+    Ok(out)
+}
+
+/// `xos goal advance`
+pub fn goal_advance(connection: &mut Connection, limit: u32) -> Result<String, String> {
+    let result = connection.call("graph.advance", json!({"limit": limit}))?;
+    let nodes = result
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if nodes.is_empty() {
+        let _ = writeln!(
+            out,
+            "{}",
+            result
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("nothing ran")
+        );
+        return Ok(out);
+    }
+    for node in &nodes {
+        let _ = writeln!(
+            out,
+            "{:<12}  {}",
+            node.get("outcome").and_then(Value::as_str).unwrap_or("-"),
+            node.get("node").and_then(Value::as_str).unwrap_or("")
+        );
+    }
+    Ok(out)
+}

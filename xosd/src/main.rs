@@ -30,6 +30,7 @@ use providers::anthropic::AnthropicProvider;
 use providers::llama_cpp::LlamaCppProvider;
 use providers::openai::OpenAiCompatibleProvider;
 use providers::ProviderRegistry;
+use graph::Graph;
 use journal::Journal;
 use memory::Memory;
 use policy::log::PolicyLog;
@@ -196,6 +197,15 @@ async fn run() -> Result<(), String> {
         "action journal ready"
     );
 
+    let graph = Arc::new(Graph::open(&config::graph_path()).map_err(|e| format!("graph: {}", e))?);
+    match graph.recover() {
+        Ok(recovered) if recovered > 0 => {
+            warn!(recovered, "nodes were left running by a stop, and are pending again")
+        }
+        Ok(_) => {}
+        Err(error) => warn!(%error, "the graph could not be recovered"),
+    }
+
     let supervisor = Arc::new(Supervisor::new(config.supervisor.clone()));
     let prompt_cache = Arc::new(
         PromptCache::open(&config::prompts_path()).map_err(|e| format!("prompts: {}", e))?,
@@ -237,6 +247,7 @@ async fn run() -> Result<(), String> {
         journal,
         supervisor,
         prompt_cache,
+        graph,
     ));
 
     if config.export.enabled {

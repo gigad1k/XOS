@@ -17,6 +17,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, info, warn};
 
+use crate::graph::{Graph, NodeSpec, NodeState, SystemState};
 use crate::journal::{Filter as JournalFilter, Journal};
 use crate::memory::{bundle, Memory, Tier};
 use crate::policy::log::PolicyLog;
@@ -77,6 +78,7 @@ pub struct Daemon {
     pub journal: Arc<Journal>,
     pub supervisor: Arc<Supervisor>,
     pub prompt_cache: Arc<PromptCache>,
+    pub graph: Arc<Graph>,
     pub version: &'static str,
 }
 
@@ -95,6 +97,7 @@ impl Daemon {
         journal: Arc<Journal>,
         supervisor: Arc<Supervisor>,
         prompt_cache: Arc<PromptCache>,
+        graph: Arc<Graph>,
     ) -> Self {
         Self {
             registry,
@@ -110,6 +113,7 @@ impl Daemon {
             journal,
             supervisor,
             prompt_cache,
+            graph,
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -326,6 +330,83 @@ async fn dispatch(
                 }
                 Err(error) => {
                     let body = failure(request.id.clone(), INVALID_PARAMS, &error.to_string());
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "graph.create_goal" => create_goal(request, daemon, writer).await,
+
+        "graph.advance" => advance(request, daemon, writer).await,
+
+        // A node that spent its retries is the supervisor's problem now.
+        "graph.needs_replan" => match daemon.graph.failed_nodes() {
+            Ok(nodes) => Some(json!({
+                "failed": nodes.iter().map(|node| json!({
+                    "goal_id": node.goal_id,
+                    "node_id": node.id,
+                    "title": node.title,
+                    "attempts": node.attempts,
+                    "failure": node.failure,
+                    "conditions": node.conditions.iter().map(|c| c.label()).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            })),
+            Err(error) => {
+                let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                let _ = write_line(writer, &body).await;
+                None
+            }
+        },
+
+        "graph.list" => match daemon.graph.goals() {
+            Ok(goals) => Some(json!({"goals": goals})),
+            Err(error) => {
+                let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                let _ = write_line(writer, &body).await;
+                None
+            }
+        },
+
+        "graph.status" => {
+            let goal_id = request
+                .params
+                .get("goal_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match (daemon.graph.goal(goal_id), daemon.graph.nodes(goal_id)) {
+                (Some(goal), Ok(nodes)) => Some(json!({
+                    "goal": goal,
+                    "nodes": nodes,
+                    "waiting_on": nodes.iter().flat_map(|node| {
+                        node.conditions.iter().map(|c| c.label().to_string())
+                    }).collect::<Vec<_>>(),
+                })),
+                _ => {
+                    let body = failure(
+                        request.id.clone(),
+                        INVALID_PARAMS,
+                        &format!("no goal called `{}`", goal_id),
+                    );
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "graph.confirm" => {
+            let node_id = request
+                .params
+                .get("node_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match daemon
+                .graph
+                .set_state(node_id, NodeState::Pending, "confirmed by a person")
+            {
+                Ok(()) => Some(json!({"node_id": node_id, "state": "pending"})),
+                Err(error) => {
+                    let body = failure(request.id.clone(), INVALID_PARAMS, &error);
                     let _ = write_line(writer, &body).await;
                     None
                 }
@@ -1376,6 +1457,275 @@ async fn promote(
             None
         }
     }
+}
+
+/// Declare a goal, and ask the supervisor to decompose it.
+///
+/// Decomposition is supervisor work by design: a 4B model is poor at
+/// long-horizon planning, and a bad plan costs far more than the one call that
+/// would have produced a good one.
+async fn create_goal(
+    request: &Request,
+    daemon: &Arc<Daemon>,
+    writer: &mut (impl AsyncWriteExt + Unpin + Send),
+) -> Option<Value> {
+    let description = request
+        .params
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if description.is_empty() {
+        let body = failure(request.id.clone(), INVALID_PARAMS, "a goal needs a description");
+        let _ = write_line(writer, &body).await;
+        return None;
+    }
+
+    let goal_id = match daemon.graph.create_goal(&description) {
+        Ok(id) => id,
+        Err(error) => {
+            let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+            let _ = write_line(writer, &body).await;
+            return None;
+        }
+    };
+
+    // A caller may supply the plan, which is what a re-plan and the tests do.
+    if let Some(specs) = request.params.get("nodes").and_then(|value| {
+        serde_json::from_value::<Vec<NodeSpec>>(value.clone()).ok()
+    }) {
+        return match daemon.graph.plan(&goal_id, &specs) {
+            Ok(count) => Some(json!({"goal_id": goal_id, "nodes": count, "planned_by": "caller"})),
+            Err(error) => {
+                let body = failure(request.id.clone(), INVALID_PARAMS, &error);
+                let _ = write_line(writer, &body).await;
+                None
+            }
+        };
+    }
+
+    let packet = digest::build(
+        &[digest::Piece::new("goal", description.clone())],
+        digest::TOKEN_CAP,
+    );
+    if let Err(outcome) = daemon.supervisor.may_wake(Trigger::NewGoal) {
+        return Some(json!({
+            "goal_id": goal_id,
+            "planned": false,
+            "supervisor": serde_json::to_value(outcome).unwrap_or(Value::Null),
+        }));
+    }
+    if let Err(outcome) = daemon.supervisor.vet(&packet) {
+        return Some(json!({
+            "goal_id": goal_id,
+            "planned": false,
+            "supervisor": serde_json::to_value(outcome).unwrap_or(Value::Null),
+        }));
+    }
+
+    let Some(name) = daemon.supervisor.config().provider.clone() else {
+        return Some(json!({
+            "goal_id": goal_id,
+            "planned": false,
+            "supervisor": serde_json::to_value(WakeOutcome::NotConfigured).unwrap_or(Value::Null),
+        }));
+    };
+    let Some(provider) = daemon.registry.get(&name) else {
+        return Some(json!({"goal_id": goal_id, "planned": false}));
+    };
+
+    let instruction = format!(
+        "Break this goal into ordered steps for a small local model to carry out.\n\n\
+         Goal: {}\n\n\
+         Reply with JSON only: an array of objects with \"title\", \"detail\", and \
+         \"after\", where after lists the titles this step waits on. No prose.",
+        description
+    );
+
+    match run_once(&provider, &instruction, None).await {
+        Ok((text, tokens)) => {
+            daemon.supervisor.charge(Trigger::NewGoal, tokens);
+            match parse_plan(&text) {
+                Some(specs) if !specs.is_empty() => match daemon.graph.plan(&goal_id, &specs) {
+                    Ok(count) => {
+                        info!(goal = %goal_id, nodes = count, "a goal was decomposed");
+                        Some(json!({
+                            "goal_id": goal_id,
+                            "planned": true,
+                            "nodes": count,
+                            "planned_by": "supervisor",
+                            "tokens": tokens,
+                        }))
+                    }
+                    Err(error) => {
+                        let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                        let _ = write_line(writer, &body).await;
+                        None
+                    }
+                },
+                _ => {
+                    warn!(goal = %goal_id, "the supervisor did not return a usable plan");
+                    Some(json!({
+                        "goal_id": goal_id,
+                        "planned": false,
+                        "reason": "the supervisor did not return a usable plan",
+                        "reply": text.chars().take(200).collect::<String>(),
+                    }))
+                }
+            }
+        }
+        Err(error) => {
+            // Offline: the goal exists and waits rather than being lost.
+            let outcome = daemon.supervisor.queue(Trigger::NewGoal, &packet, &error);
+            Some(json!({
+                "goal_id": goal_id,
+                "planned": false,
+                "supervisor": serde_json::to_value(outcome).unwrap_or(Value::Null),
+            }))
+        }
+    }
+}
+
+/// Pull a JSON array of node specs out of a model's reply.
+fn parse_plan(text: &str) -> Option<Vec<NodeSpec>> {
+    let start = text.find('[')?;
+    let end = text.rfind(']')?;
+    if end <= start {
+        return None;
+    }
+    serde_json::from_str::<Vec<NodeSpec>>(&text[start..=end]).ok()
+}
+
+/// Run whatever is eligible right now.
+///
+/// Execution is local work, and it goes through the policy engine and the
+/// router like anything else. The graph module holds no provider handle, so
+/// there is no way around either.
+async fn advance(
+    request: &Request,
+    daemon: &Arc<Daemon>,
+    writer: &mut (impl AsyncWriteExt + Unpin + Send),
+) -> Option<Value> {
+    if daemon.halt.guard().is_err() {
+        let body = failure(request.id.clone(), HALTED, "the system is halted.");
+        let _ = write_line(writer, &body).await;
+        return None;
+    }
+
+    let limit = request
+        .params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(1) as usize;
+
+    let state = if request
+        .params
+        .get("ignore_conditions")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        SystemState::unrestricted()
+    } else {
+        SystemState::read()
+    };
+    let eligible = match daemon.graph.eligible(&state) {
+        Ok(nodes) => nodes,
+        Err(error) => {
+            let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+            let _ = write_line(writer, &body).await;
+            return None;
+        }
+    };
+    if eligible.is_empty() {
+        return Some(json!({"ran": 0, "reason": "nothing is eligible to run"}));
+    }
+
+    let local = daemon
+        .router
+        .read()
+        .ok()
+        .map(|router| router.config().local.clone())
+        .unwrap_or_else(|| daemon.default_provider.clone());
+    let Some(provider) = daemon.registry.get(&local) else {
+        let body = failure(
+            request.id.clone(),
+            INVALID_PARAMS,
+            &format!("no local provider named `{}`", local),
+        );
+        let _ = write_line(writer, &body).await;
+        return None;
+    };
+
+    let mut ran = Vec::new();
+    for node in eligible.into_iter().take(limit.max(1)) {
+        // Policy first, exactly as a tool call would be judged.
+        let decision = daemon.policy.evaluate(
+            "execute_node",
+            &json!({"title": node.title, "detail": node.detail}),
+            &PolicyContext {
+                local_only: daemon.cost_mode() == CostMode::AggressiveLocal,
+                ..Default::default()
+            },
+        );
+        let _ = daemon
+            .policy_log
+            .record("execute_node", &node.title, &decision, "graph");
+
+        match &decision {
+            PolicyDecision::Block { reason } => {
+                let _ = daemon.graph.fail(&node.id, reason);
+                ran.push(json!({"node": node.title, "outcome": "blocked", "reason": reason}));
+                continue;
+            }
+            PolicyDecision::Prompt { reason } => {
+                let _ = daemon.graph.needs_user(&node.id, reason);
+                ran.push(json!({"node": node.title, "outcome": "needs-user", "reason": reason}));
+                continue;
+            }
+            _ => {}
+        }
+
+        if daemon.graph.start(&node.id).is_err() {
+            continue;
+        }
+
+        // A compiled prompt for this kind of work carries its cache key, so the
+        // prefix stays warm across nodes.
+        let compiled = daemon.prompt_cache.get("execute-node");
+        let cache_key = compiled.as_ref().map(|prompt| prompt.cache_key.clone());
+        let preamble = compiled
+            .as_ref()
+            .map(|prompt| format!("{}\n\n", prompt.body))
+            .unwrap_or_default();
+        let prompt = format!(
+            "{}You are carrying out one step of a larger goal. Do it, then say what \
+             happened in one or two sentences.\n\nStep: {}\n{}",
+            preamble, node.title, node.detail
+        );
+
+        match run_once(&provider, &prompt, cache_key).await {
+            Ok((text, _)) => {
+                let summary = text.chars().take(600).collect::<String>();
+                let _ = daemon.graph.finish(&node.id, &summary);
+                let _ = daemon.prompt_cache.record_use("execute-node", true);
+                info!(node = %node.title, "a node finished");
+                ran.push(json!({"node": node.title, "outcome": "done", "result": summary}));
+            }
+            Err(error) => {
+                let state = daemon.graph.fail(&node.id, &error).unwrap_or(NodeState::Failed);
+                let _ = daemon.prompt_cache.record_use("execute-node", false);
+                warn!(node = %node.title, %error, "a node failed");
+                ran.push(json!({
+                    "node": node.title,
+                    "outcome": state.label(),
+                    "reason": error,
+                }));
+            }
+        }
+    }
+
+    Some(json!({"ran": ran.len(), "nodes": ran}))
 }
 
 /// Build a digest from the pieces a caller offers.
