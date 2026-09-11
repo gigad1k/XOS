@@ -6,7 +6,7 @@
 | 2 | P1 | XOS Bench — tool-call harness | done | *GATE* |
 | 3 | P2 | xosd skeleton, provider trait, halt primitive | done | |
 | 4 | P3 | xos chat TUI | done | |
-| 5 | P4 | XOS Vault and cloud providers | todo | |
+| 5 | P4 | XOS Vault and cloud providers | in-progress | |
 | 6 | P5 | Router and escalation log | todo | *GATE* |
 | 7 | P6 | XOS Memory, export and import | todo | |
 | 8 | P7 | Policy engine and egress protection | todo | *GATE* |
