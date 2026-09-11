@@ -1,0 +1,9 @@
+# XOS is a Linux system. Everything in it is checked out with LF, because a
+# CRLF line ending in a shell script breaks the shebang line and the error it
+# produces says nothing useful about why.
+* text=auto eol=lf
+
+# Never rewrite binaries.
+*.png binary
+*.jpg binary
+*.gz  binary
