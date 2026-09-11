@@ -21,6 +21,7 @@ use crate::graph::{Graph, NodeSpec, NodeState, SystemState};
 use crate::journal::{Filter as JournalFilter, Journal};
 use crate::memory::{bundle, Memory, Tier};
 use crate::policy::log::PolicyLog;
+use crate::scheduler::{EnergyLog, MachineState, PowerManager, Pulse, TickAction};
 use crate::policy::{
     digest, redact, Context as PolicyContext, Permit, Policy, PolicyDecision,
 };
@@ -79,6 +80,12 @@ pub struct Daemon {
     pub supervisor: Arc<Supervisor>,
     pub prompt_cache: Arc<PromptCache>,
     pub graph: Arc<Graph>,
+    pub pulse: Arc<Pulse>,
+    /// Where the local model is served from, so the GPU can be released.
+    pub local_base_url: String,
+    pub local_model: String,
+    pub power: Arc<PowerManager>,
+    pub energy: Arc<EnergyLog>,
     pub version: &'static str,
 }
 
@@ -98,6 +105,11 @@ impl Daemon {
         supervisor: Arc<Supervisor>,
         prompt_cache: Arc<PromptCache>,
         graph: Arc<Graph>,
+        pulse: Arc<Pulse>,
+        power: Arc<PowerManager>,
+        energy: Arc<EnergyLog>,
+        local_base_url: String,
+        local_model: String,
     ) -> Self {
         Self {
             registry,
@@ -114,6 +126,11 @@ impl Daemon {
             supervisor,
             prompt_cache,
             graph,
+            pulse,
+            power,
+            energy,
+            local_base_url,
+            local_model,
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -334,6 +351,55 @@ async fn dispatch(
                     None
                 }
             }
+        }
+
+        "pulse.status" => {
+            let machine = MachineState::read();
+            let today = daemon.energy.today().unwrap_or_else(|_| crate::scheduler::power::DayEnergy {
+                day: "today".to_string(),
+                watt_hours: 0.0,
+                samples: 0,
+            });
+            let tariff = daemon.power.config().tariff_per_kwh;
+            Some(json!({
+                "halted": daemon.halt.is_halted(),
+                "tick_secs": daemon.pulse.config().tick_secs,
+                "idle_secs": daemon.power.idle_secs(),
+                "model_loaded": daemon.power.model_loaded(),
+                "machine": machine,
+                "summary": machine.summary(),
+                "energy": {
+                    "watt_hours_today": today.watt_hours,
+                    "cost_today": today.cost(tariff),
+                    "tariff_per_kwh": tariff,
+                    "samples": today.samples,
+                    "estimate": true,
+                },
+                "energy_recent": daemon.energy.recent(7).unwrap_or_default(),
+                "spend_today": daemon.spend.spent_today_total().unwrap_or(0.0),
+                // Reported, never run from a status call: suspending the
+                // machine is not a side effect of asking how it is.
+                "suspend_command": daemon.power.suspend_command(
+                    daemon.pulse.config().tick_secs
+                ),
+            }))
+        }
+
+        "pulse.tasks" => Some(json!({
+            "tasks": daemon.pulse.tasks(),
+            "watchers": daemon.pulse.config().watchers,
+        })),
+
+        // Run one tick now, rather than waiting for the heartbeat.
+        "pulse.tick" => {
+            let report = daemon.pulse.tick(daemon.halt.is_halted(), daemon.power.idle_secs());
+            let carried = carry_out(daemon, &report.actions).await;
+            Some(json!({
+                "ran": report.ran,
+                "reason": report.reason,
+                "actions": report.actions,
+                "outcome": carried,
+            }))
         }
 
         "graph.create_goal" => create_goal(request, daemon, writer).await,
@@ -1629,16 +1695,33 @@ async fn advance(
     } else {
         SystemState::read()
     };
-    let eligible = match daemon.graph.eligible(&state) {
+
+    let ran = run_eligible(daemon, limit, &state).await;
+    if ran.is_empty() {
+        return Some(json!({"ran": 0, "reason": "nothing is eligible to run"}));
+    }
+    Some(json!({"ran": ran.len(), "nodes": ran}))
+}
+
+/// Run whatever is eligible, and report what happened to each node.
+///
+/// Shared by the `graph.advance` call and the heartbeat, so a node started by
+/// the scheduler goes through exactly the same policy and routing as one started
+/// by a person.
+pub async fn run_eligible(
+    daemon: &Arc<Daemon>,
+    limit: usize,
+    state: &SystemState,
+) -> Vec<Value> {
+    let eligible = match daemon.graph.eligible(state) {
         Ok(nodes) => nodes,
         Err(error) => {
-            let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
-            let _ = write_line(writer, &body).await;
-            return None;
+            warn!(%error, "the graph could not be read");
+            return Vec::new();
         }
     };
     if eligible.is_empty() {
-        return Some(json!({"ran": 0, "reason": "nothing is eligible to run"}));
+        return Vec::new();
     }
 
     let local = daemon
@@ -1648,13 +1731,8 @@ async fn advance(
         .map(|router| router.config().local.clone())
         .unwrap_or_else(|| daemon.default_provider.clone());
     let Some(provider) = daemon.registry.get(&local) else {
-        let body = failure(
-            request.id.clone(),
-            INVALID_PARAMS,
-            &format!("no local provider named `{}`", local),
-        );
-        let _ = write_line(writer, &body).await;
-        return None;
+        warn!(provider = %local, "the local provider is not configured");
+        return Vec::new();
     };
 
     let mut ran = Vec::new();
@@ -1713,19 +1791,72 @@ async fn advance(
                 ran.push(json!({"node": node.title, "outcome": "done", "result": summary}));
             }
             Err(error) => {
-                let state = daemon.graph.fail(&node.id, &error).unwrap_or(NodeState::Failed);
+                let outcome = daemon.graph.fail(&node.id, &error).unwrap_or(NodeState::Failed);
                 let _ = daemon.prompt_cache.record_use("execute-node", false);
                 warn!(node = %node.title, %error, "a node failed");
                 ran.push(json!({
                     "node": node.title,
-                    "outcome": state.label(),
+                    "outcome": outcome.label(),
                     "reason": error,
                 }));
             }
         }
     }
 
-    Some(json!({"ran": ran.len(), "nodes": ran}))
+    ran
+}
+
+/// Do what a tick decided. Pulse chooses; this carries it out, so every action
+/// still goes through the policy engine and the router.
+pub async fn carry_out(daemon: &Arc<Daemon>, actions: &[TickAction]) -> Vec<Value> {
+    let mut done = Vec::new();
+    for action in actions {
+        match action {
+            TickAction::AdvanceGraph { nodes } => {
+                let state = crate::graph::SystemState::read();
+                let ran = run_eligible(daemon, *nodes, &state).await;
+                if !ran.is_empty() {
+                    daemon.power.touch();
+                }
+                done.push(json!({"action": "advance-graph", "nodes": ran}));
+            }
+            TickAction::StartTask { name, goal } | TickAction::WatchFired { name, goal } => {
+                match daemon.graph.create_goal(goal) {
+                    Ok(goal_id) => {
+                        info!(task = %name, goal = %goal_id, "the heartbeat started a task");
+                        done.push(json!({"action": "start-task", "name": name, "goal_id": goal_id}));
+                    }
+                    Err(error) => {
+                        warn!(task = %name, %error, "a scheduled task could not start");
+                    }
+                }
+            }
+            TickAction::UnloadModel { idle_secs } => {
+                // Releasing the GPU is the difference between free and £150 a year.
+                let target = daemon
+                    .router
+                    .read()
+                    .ok()
+                    .map(|router| router.config().local.clone())
+                    .unwrap_or_else(|| daemon.default_provider.clone());
+                let outcome = match daemon.registry.get(&target) {
+                    Some(_) => match daemon.power.unload(&daemon.local_base_url, &daemon.local_model) {
+                        Ok(()) => {
+                            info!(idle_secs, "released the GPU after idling");
+                            "unloaded"
+                        }
+                        Err(error) => {
+                            debug!(%error, "the endpoint would not unload");
+                            "refused"
+                        }
+                    },
+                    None => "no provider",
+                };
+                done.push(json!({"action": "unload-model", "outcome": outcome}));
+            }
+        }
+    }
+    done
 }
 
 /// Build a digest from the pieces a caller offers.

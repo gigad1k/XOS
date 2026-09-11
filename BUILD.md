@@ -13,7 +13,7 @@
 | 9 | P7b | Action journal and undo | done | *GATE* |
 | 10 | P8 | Supervisor | done | |
 | 11 | P9 | XOS Goals, the task graph | done | |
-| 12 | P10 | XOS Pulse and power management | in-progress | |
+| 12 | P10 | XOS Pulse and power management | done | |
 | 13 | P11 | Status bar and desktop theme | todo | |
 | 14 | P12 | Mission Control | todo | |
 | 15 | HW-1 | Hardware detection | todo | |
@@ -317,3 +317,36 @@ real disks.
 - Model quality note, not a code issue: llama3.2 answered the third step with
   something about renewable energy. On the target box this is Gemma 4 E4B's job,
   and a node's result is worth reading before trusting it.
+
+- P10 — done. Check passed in substance: a scheduled task fired from the
+  heartbeat and became a goal, and a conditioned node deferred rather than
+  failing. With the GPU deliberately loaded to 90% a node requiring `gpu-idle`
+  stayed `pending` and the daemon reported nothing eligible; once the GPU fell to
+  1% the same node ran and finished, with its retry budget untouched.
+- Deviation from the check's wording: it says to unplug ethernet. That is not
+  something this run could do, so the same property was demonstrated with the
+  condition that could be controlled here, by loading the GPU. The network
+  condition now reads the same machine state the model reads, so offline or
+  metered both hold a node back, and the interval logic is unit-tested.
+- Also worth stating plainly: an interval task is due the first time it is seen,
+  so a task set to every two minutes runs on the first tick and every two
+  minutes after. The two-minute wait in the check was therefore the heartbeat
+  arriving, not the interval elapsing.
+- Power management is wired, not decorative. The model is released from VRAM
+  after an idle timeout, energy is sampled every tick from the GPU's own power
+  reading plus a configured baseline for the rest of the box, and
+  `xos pulse status` shows watt-hours and their cost beside API spend. In this
+  run that read 7.3 Wh against 2.31 of API spend. Both numbers are real; the
+  electricity one is labelled an estimate everywhere it appears, because the
+  baseline is configured rather than measured.
+- A year of idling at 80W comes to roughly £170 at 24.5p per kWh, which is the
+  figure the prompt warns about. There is a test asserting that arithmetic, so
+  the claim in the docs cannot drift away from the code.
+- Suspend-with-RTC-wake is implemented as a command the caller may run and is off
+  by default. `pulse.status` reports what would run rather than running it,
+  because suspending a machine should not be a side effect of asking how it is.
+- Pulse orchestrates only. It produces a list of actions and the daemon carries
+  them out through the same path a person's request takes, so a node started by
+  the heartbeat passes the policy engine and the router exactly as one started by
+  hand. A halted system still ticks, so status stays truthful, and advances
+  nothing.

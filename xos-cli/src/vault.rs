@@ -778,3 +778,118 @@ pub fn goal_advance(connection: &mut Connection, limit: u32) -> Result<String, S
     }
     Ok(out)
 }
+
+/// `xos pulse status`
+pub fn pulse_status(connection: &mut Connection) -> Result<String, String> {
+    let result = connection.call("pulse.status", json!({}))?;
+    use std::fmt::Write as _;
+    let mut out = String::new();
+
+    let _ = writeln!(
+        out,
+        "state       {}",
+        if result.get("halted").and_then(Value::as_bool).unwrap_or(false) {
+            "halted"
+        } else {
+            "running"
+        }
+    );
+    let _ = writeln!(
+        out,
+        "tick        every {}s",
+        result.get("tick_secs").and_then(Value::as_u64).unwrap_or(0)
+    );
+    let _ = writeln!(
+        out,
+        "model       {}",
+        if result.get("model_loaded").and_then(Value::as_bool).unwrap_or(false) {
+            "in VRAM"
+        } else {
+            "not loaded"
+        }
+    );
+    let _ = writeln!(
+        out,
+        "idle        {}s",
+        result.get("idle_secs").and_then(Value::as_u64).unwrap_or(0)
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "machine     {}",
+        result.get("summary").and_then(Value::as_str).unwrap_or("-")
+    );
+    let _ = writeln!(out);
+
+    let watt_hours = result
+        .pointer("/energy/watt_hours_today")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let cost = result
+        .pointer("/energy/cost_today")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let spend = result.get("spend_today").and_then(Value::as_f64).unwrap_or(0.0);
+    let _ = writeln!(out, "today");
+    let _ = writeln!(out, "  electricity  {:.1} Wh, about {:.4} (estimate)", watt_hours, cost);
+    let _ = writeln!(out, "  api          {:.4}", spend);
+    Ok(out)
+}
+
+/// `xos pulse tasks`
+pub fn pulse_tasks(connection: &mut Connection) -> Result<String, String> {
+    let result = connection.call("pulse.tasks", json!({}))?;
+    let tasks = result
+        .get("tasks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let watchers = result
+        .get("watchers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if tasks.is_empty() && watchers.is_empty() {
+        let _ = writeln!(
+            out,
+            "Nothing is scheduled. Add tasks under [[pulse.tasks]] in the config."
+        );
+        return Ok(out);
+    }
+    if !tasks.is_empty() {
+        let _ = writeln!(out, "{:<18} {:<14}  {}", "task", "when", "goal");
+        for task in &tasks {
+            let when = match (
+                task.get("every_minutes").and_then(Value::as_u64),
+                task.get("at").and_then(Value::as_str),
+            ) {
+                (Some(minutes), _) => format!("every {}m", minutes),
+                (None, Some(at)) => format!("daily at {}", at),
+                _ => "never".to_string(),
+            };
+            let _ = writeln!(
+                out,
+                "{:<18} {:<14}  {}",
+                task.get("name").and_then(Value::as_str).unwrap_or("-"),
+                when,
+                task.get("goal").and_then(Value::as_str).unwrap_or("")
+            );
+        }
+    }
+    if !watchers.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "{:<18} {}", "watcher", "path");
+        for watcher in &watchers {
+            let _ = writeln!(
+                out,
+                "{:<18} {}",
+                watcher.get("name").and_then(Value::as_str).unwrap_or("-"),
+                watcher.get("path").and_then(Value::as_str).unwrap_or("")
+            );
+        }
+    }
+    Ok(out)
+}

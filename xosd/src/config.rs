@@ -18,6 +18,7 @@ use crate::providers::llama_cpp::LlamaCppConfig;
 use crate::memory::embed::EmbedderConfig;
 use crate::journal::JournalConfig;
 use crate::policy::PolicyConfig;
+use crate::scheduler::PulseConfig;
 use crate::supervisor::SupervisorConfig;
 use crate::providers::openai::OpenAiConfig;
 use crate::router::RouterConfig;
@@ -67,6 +68,9 @@ pub struct Config {
     /// The event-driven cloud tier.
     #[serde(default)]
     pub supervisor: SupervisorConfig,
+    /// The heartbeat, and what it is allowed to cost.
+    #[serde(default)]
+    pub pulse: PulseConfig,
 }
 
 /// A scheduled, encrypted export of everything XOS remembers.
@@ -132,6 +136,7 @@ impl Default for Config {
             policy: PolicyConfig::default(),
             journal: JournalConfig::default(),
             supervisor: SupervisorConfig::default(),
+            pulse: PulseConfig::default(),
         }
     }
 }
@@ -149,6 +154,14 @@ pub fn vault_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("xos")
+}
+
+/// The energy log.
+pub fn energy_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("energy.db")
 }
 
 /// The task graph.

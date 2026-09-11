@@ -51,6 +51,9 @@ enum Command {
     /// Search, inspect and promote what XOS remembers.
     #[command(subcommand)]
     Memory(MemoryCommand),
+    /// The heartbeat: what it is doing and what it costs.
+    #[command(subcommand)]
+    Pulse(PulseCommand),
     /// Declare and follow long-running goals.
     #[command(subcommand)]
     Goal(GoalCommand),
@@ -84,6 +87,14 @@ enum Command {
         #[arg(long, default_value_t = 7)]
         days: u32,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum PulseCommand {
+    /// Machine state, and today's electricity beside today's API spend.
+    Status,
+    /// Scheduled tasks and watchers.
+    Tasks,
 }
 
 #[derive(Subcommand, Debug)]
@@ -204,6 +215,10 @@ fn main() -> std::process::ExitCode {
         Command::Journal { goal, tool, limit } => {
             vault::journal(&mut connection, goal.as_deref(), tool.as_deref(), limit)
         }
+        Command::Pulse(command) => match command {
+            PulseCommand::Status => vault::pulse_status(&mut connection),
+            PulseCommand::Tasks => vault::pulse_tasks(&mut connection),
+        },
         Command::Goal(command) => match command {
             GoalCommand::New { description } => {
                 vault::goal_new(&mut connection, &description.join(" "))

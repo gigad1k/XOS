@@ -60,7 +60,12 @@ impl SystemState {
         Self {
             on_ac_power: read_ac_power().unwrap_or(true),
             gpu_idle: read_gpu_idle().unwrap_or(true),
-            unmetered_network: true,
+            // Offline or metered both mean "do not do this now". Read from the
+            // same place the model reads it, so the two never disagree.
+            unmetered_network: {
+                let network = crate::scheduler::machine::MachineState::read().network;
+                network.online && !network.metered
+            },
         }
     }
 }

@@ -22,7 +22,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use tokio::net::UnixListener;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use config::{Config, ProviderConfig};
@@ -34,6 +34,7 @@ use graph::Graph;
 use journal::Journal;
 use memory::Memory;
 use policy::log::PolicyLog;
+use scheduler::{EnergyLog, MachineState, PowerManager, Pulse};
 use supervisor::{PromptCache, Supervisor};
 use policy::Policy;
 use router::log::EscalationLog;
@@ -130,6 +131,17 @@ async fn run() -> Result<(), String> {
         );
     }
 
+    // Needed to release the GPU: the unload call goes to the endpoint itself.
+    let (local_base_url, local_model) = match config.providers.get(&config.router.local) {
+        Some(ProviderConfig::LlamaCpp(settings)) => {
+            (settings.base_url.clone(), settings.model.clone())
+        }
+        Some(ProviderConfig::OpenAiCompatible(settings)) => {
+            (settings.base_url.clone(), settings.model.clone())
+        }
+        _ => (String::new(), String::new()),
+    };
+
     let (socket_path, moved) = config.resolve_socket();
     if let Some(reason) = moved {
         warn!("{}", reason);
@@ -197,6 +209,12 @@ async fn run() -> Result<(), String> {
         "action journal ready"
     );
 
+    let pulse = Arc::new(Pulse::new(config.pulse.clone()));
+    let power = Arc::new(PowerManager::new(config.pulse.power.clone()));
+    let energy = Arc::new(
+        EnergyLog::open(&config::energy_path()).map_err(|e| format!("energy: {}", e))?,
+    );
+
     let graph = Arc::new(Graph::open(&config::graph_path()).map_err(|e| format!("graph: {}", e))?);
     match graph.recover() {
         Ok(recovered) if recovered > 0 => {
@@ -248,7 +266,14 @@ async fn run() -> Result<(), String> {
         supervisor,
         prompt_cache,
         graph,
+        Arc::clone(&pulse),
+        Arc::clone(&power),
+        Arc::clone(&energy),
+        local_base_url,
+        local_model,
     ));
+
+    spawn_heartbeat(Arc::clone(&daemon));
 
     if config.export.enabled {
         spawn_scheduled_export(config.clone(), Arc::clone(&memory));
@@ -263,6 +288,41 @@ async fn run() -> Result<(), String> {
 
     let _ = std::fs::remove_file(&socket_path);
     Ok(())
+}
+
+/// The heartbeat.
+///
+/// It decides on a schedule and asks the daemon to act, so nothing here
+/// bypasses the policy engine. A halted system still ticks, because status
+/// should stay truthful, but it advances nothing.
+fn spawn_heartbeat(daemon: Arc<rpc::Daemon>) {
+    let interval_secs = daemon.pulse.config().tick_secs.max(5);
+    info!(tick_secs = interval_secs, "the heartbeat is running");
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        // The first tick fires at once; let the daemon settle first.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+
+            // Measure what the machine used over the interval just past.
+            let machine = MachineState::read();
+            let gpu_watts = machine.gpu.as_ref().and_then(|gpu| gpu.power_draw_w);
+            let watts = daemon.power.watts_now(gpu_watts);
+            if let Err(error) = daemon.energy.add(watts, interval_secs as f64) {
+                debug!(%error, "energy was not recorded");
+            }
+
+            let halted = daemon.halt.is_halted();
+            let report = daemon.pulse.tick(halted, daemon.power.idle_secs());
+            if !report.ran {
+                continue;
+            }
+            let carried = rpc::carry_out(&daemon, &report.actions).await;
+            debug!(actions = carried.len(), "a tick finished");
+        }
+    });
 }
 
 /// Write an encrypted bundle on a timer, when asked to in config.
