@@ -52,6 +52,21 @@ cargo run --bin xos
 
 MIT. See `LICENSE`.
 
+## Installing
+
+Write the XOS medium to a USB stick, boot it, and type `install-xos`. That is the
+whole installation: it works out the hardware, asks which disk, and does the rest.
+
+Building the medium needs an Arch machine, because `mkarchiso` does:
+
+```
+sudo ./iso/build.sh --check     # say what is missing, build nothing
+sudo ./iso/build.sh             # build it into out/
+```
+
+Neither the image nor the install has been run on real hardware yet. Use a
+virtual machine first.
+
 ## The manual
 
 [docs/manual.md](docs/manual.md) — installing, running, supervising and stopping XOS.

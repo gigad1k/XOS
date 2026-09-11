@@ -78,7 +78,11 @@ esac
 
 xstep "Encryption"
 
-if [ "$ENCRYPT" = "1" ]; then
+if [ "${XOS_ENCRYPTION_SETTLED:-0}" = "1" ]; then
+  # Asked already, by whatever is driving this. Repeating the advice here would
+  # be a second version of a conversation somebody has had once.
+  xlog "   $([ "$ENCRYPT" = "1" ] && echo "encrypting, as chosen" || echo "not encrypting, as chosen")"
+elif [ "$ENCRYPT" = "1" ]; then
   if has_aes_ni; then
     xlog "   This CPU has AES-NI, so encryption costs almost nothing. Good choice."
   else
@@ -99,12 +103,10 @@ if [ "$ENCRYPT" = "1" ]; then
       esac
     fi
   fi
+elif has_aes_ni; then
+  xlog "   Not encrypting. This CPU has AES-NI, so --encrypt would be close to free."
 else
-  if has_aes_ni; then
-    xlog "   Not encrypting. This CPU has AES-NI, so --encrypt would be close to free."
-  else
-    xlog "   Not encrypting, which on a CPU without AES-NI is the sensible default."
-  fi
+  xlog "   Not encrypting, which on a CPU without AES-NI is the sensible default."
 fi
 
 # ---------------------------------------------------------------- the disk

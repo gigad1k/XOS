@@ -807,3 +807,54 @@ the interactive branches of the steps that shell out - `gh auth login`, `rclone
 config`, the WhatsApp QR - were not exercised, because each opens somebody else's
 login flow. Mission Control's first-run view was exercised through its endpoints,
 not rendered in a browser.
+
+### The install medium
+
+Not a numbered task — this is the ISO that HW-2 and P13 both assumed and neither
+built, added after the build was otherwise complete.
+
+- `iso/` is an archiso profile: `profiledef.sh`, `packages.x86_64`,
+  `pacman.conf`, the live filesystem overlay, syslinux for legacy BIOS and
+  systemd-boot for UEFI, plus `build.sh` and 71 tests.
+- Both firmware paths are boot modes, with BIOS listed first. That ordering is
+  not cosmetic: it is the mode most likely to be forgotten and the one this
+  project cannot do without, since Omarchy's own installer requires UEFI and
+  would exclude the machines XOS exists for.
+- Both firmwares also get a basic-graphics entry with `nomodeset`. A machine
+  whose card the kernel cannot drive must still be installable, and that entry
+  is the difference between a black screen and an install.
+- `install/live.sh` is the all-in-one installer, and `install-xos` on the medium
+  is one word that runs it. It reads the machine, lists the disks, asks which,
+  asks about encryption and a name, then drives base.sh and install.sh and
+  offers to reboot. The only thing it refuses to do without a person is choose
+  the disk.
+- **The medium carries prebuilt `xos` and `xosd`.** Driver resolution lives in
+  the daemon and the CLI is a thin client over it, so on live media with no
+  daemon the hardware step would have found no inventory and resolved no drivers
+  at all — on exactly the machines that most need it. `live.sh` starts the
+  daemon, uses it, and stops it.
+- **The bundled wifi drivers finally exist.** `build.sh` fetches, builds and
+  places rtl8821ce, rtl8723bu and broadcom-wl on the medium. HW-2 has been
+  reaching for these since it was written; until now nothing put them there.
+- Writing it found two real faults:
+  1. **The drivers would never have been found.** `00-hardware.sh` looked only in
+     `/run/archiso/bootmnt/xos/dkms`, which is the mounted image; archiso's
+     overlay lands the files in the live filesystem instead. The bundled drivers
+     would have been built onto the medium and then ignored. It now searches the
+     places they can actually be, in order.
+  2. **The package list had a name that does not exist** (`wireless_urch_tools`),
+     which fails the entire image build. That is exactly the class of fault the
+     profile tests were written to catch before somebody spends half an hour
+     discovering it.
+- A typo in a package name, a boot entry naming a kernel path the profile does
+  not produce, a bootmode with no configuration behind it: each costs a full
+  build to find and each is visible without one. `iso/tests/iso.test.sh` checks
+  all of it, and checks that what `build.sh` writes is where `00-hardware.sh`
+  looks.
+- **Verification limit, and it is the whole of it.** `mkarchiso` runs on Arch and
+  there is no Arch machine here, so the image has never been built, written to a
+  stick, or booted. The profile is consistent and its tests pass; whether it
+  produces a medium that boots on a real UEFI machine and a real BIOS machine is
+  exactly what has not been shown. `install/live.sh` was exercised end to end
+  with every external command stubbed: it completes, refuses to choose a disk
+  unattended, and calls nothing destructive under `--dry-run`.

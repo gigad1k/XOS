@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# The one command the medium tells people to type.
+#
+# A thin wrapper so that what somebody types is short and memorable, and so the
+# installer itself stays where the rest of the install scripts live.
+exec /root/xos/install/live.sh "$@"

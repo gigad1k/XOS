@@ -1,0 +1,20 @@
+
+  XOS install medium
+
+  To install XOS on this machine, type:
+
+      install-xos
+
+  It works out what hardware is here, asks which disk to use, and does the
+  rest. Nothing is erased until you have seen the disk and typed its name
+  back.
+
+  Other things worth knowing:
+
+      install-xos --dry-run     every question, nothing written
+      xos hardware              what is in this machine, and what it needs
+      iwctl                     connect to wifi
+      ip a                      check the network
+
+  There is a full manual at /root/xos/docs/manual.md.
+

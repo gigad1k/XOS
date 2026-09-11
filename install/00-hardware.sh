@@ -40,7 +40,27 @@ KERNEL_PARAMETERS_FILE="$ROOT/etc/xos/kernel-parameters"
 REPORT_JSON="$ROOT/var/log/xos-hardware-report.json"
 # Bundled DKMS sources live on the install media. They have to: the AUR needs
 # the internet that the wifi driver is supposed to be providing.
-DKMS_DIR="${XOS_DKMS_DIR:-/run/archiso/bootmnt/xos/dkms}"
+#
+# Several places, because the answer depends on how XOS got here. The XOS
+# medium carries them in its own filesystem overlay; a plain Arch ISO with the
+# packages copied alongside puts them on the mounted image; an installed system
+# keeps them where the rest of XOS lives. Naming only one of those is how the
+# drivers get built onto a medium and then never found.
+find_dkms_dir() {
+  local candidate
+  for candidate in     "${XOS_DKMS_DIR:-}"     /root/xos/dkms     /run/archiso/bootmnt/xos/dkms     /usr/share/xos/dkms
+  do
+    [ -n "$candidate" ] || continue
+    # A directory with nothing in it is not a source of drivers.
+    if [ -d "$candidate" ] && [ -n "$(ls -A "$candidate" 2>/dev/null | grep -v '^README$')" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s' "${XOS_DKMS_DIR:-/root/xos/dkms}"
+  return 1
+}
+DKMS_DIR="$(find_dkms_dir)"
 
 DRY_RUN=0
 ASSUME_NO=0
@@ -388,6 +408,7 @@ elif [ "$HAS_WIFI_HARDWARE" = "1" ] || [ "${XOS_FAKE_WIFI:-}" = "0" ]; then
     for source in "$DKMS_DIR"/*; do
       [ -e "$source" ] || continue
       name="$(basename "$source")"
+      [ "$name" = "README" ] && continue
       TRIED="$TRIED $name"
       log "   trying bundled $name"
       if [ "$DRY_RUN" = "1" ]; then

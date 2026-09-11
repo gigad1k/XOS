@@ -1,0 +1,54 @@
+# What the live medium carries.
+#
+# Kept to what the installer actually uses. Every package here is decompressed
+# into memory on a machine that may only have 2GB of it, so this is not the
+# place to be generous.
+
+# the system itself
+base
+linux
+linux-firmware
+mkinitcpio
+mkinitcpio-archiso
+syslinux
+
+# partitioning and filesystems, which base.sh drives
+gptfdisk
+parted
+dosfstools
+e2fsprogs
+cryptsetup
+arch-install-scripts
+
+# making it boot afterwards
+grub
+efibootmgr
+
+# getting online during the install
+networkmanager
+iwd
+iw
+wpa_supplicant
+dhcpcd
+openssh
+
+# what the install scripts call
+bash
+coreutils
+curl
+git
+jq
+python
+sed
+gawk
+less
+nano
+pciutils
+usbutils
+dmidecode
+
+# quality of life for anyone who drops to a shell
+htop
+lsof
+rsync
+vim

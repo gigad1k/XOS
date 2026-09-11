@@ -38,8 +38,11 @@ So: **use a virtual machine first.** It costs you twenty minutes and it is the
 difference between finding out that a package pin is stale and finding out on
 the machine you needed today.
 
-There is no XOS ISO yet. You boot the official Arch ISO and run the XOS
-installer from it.
+There is an XOS install medium now, and it is the intended way in. It has not
+been built or booted by anybody yet — the profile is written and tested, but
+`mkarchiso` only runs on Arch, so the image itself is still unproven. If you have
+an Arch machine, building it takes one command. If you do not, the Arch ISO route
+below still works.
 
 ---
 
@@ -51,25 +54,66 @@ installer from it.
   and nothing above it, because raising that floor would exclude the machines
   it exists for.
 - A disk you are willing to erase completely.
-- A USB stick, and the official Arch ISO written to it.
+- A USB stick, with the XOS medium written to it (or the official Arch ISO,
+  which also works — see below).
 - Ideally, an ethernet cable. Wifi during install works on most hardware and
   the installer tells you plainly when it does not.
 
 A GPU is optional. With one, XOS runs a model locally. Without one, it still
 runs — either slowly on the CPU, or through an API.
 
-### The steps
+### With the XOS medium
 
-Write the Arch ISO to a USB stick, boot it, and then:
+Write the ISO to a USB stick, boot it, and type one thing:
+
+```
+install-xos
+```
+
+That is the whole installation. It works out what hardware is here, shows you
+the disks, asks which one, asks about encryption and a name, and then partitions,
+installs Arch, applies the XOS layer and offers to reboot.
+
+`install-xos --dry-run` walks the entire thing and writes nothing, which is worth
+doing once before the real run.
+
+### Building the medium
+
+Needs an Arch machine, because `mkarchiso` does. This is the only part of XOS
+with that requirement, and it exists so that nobody installing XOS has one.
+
+```
+git clone https://github.com/gigad1k/XOS
+cd XOS
+sudo ./iso/build.sh --check     # say what is missing, build nothing
+sudo ./iso/build.sh             # build it
+```
+
+It puts the XOS source, prebuilt `xos` and `xosd` binaries, and the wifi drivers
+that are not in the kernel onto the medium. The binaries matter: driver
+resolution lives in the daemon, and without them the install would resolve no
+drivers at all, on exactly the machines that most need it.
+
+Then:
+
+```
+sudo dd if=out/xos-*.iso of=/dev/sdX bs=4M status=progress oflag=sync
+```
+
+`/dev/sdX` is the stick, not a partition on it, and everything on it goes.
+
+### Without the XOS medium
+
+The official Arch ISO works too. Boot it, then:
 
 ```
 pacman -Sy git
 curl -fsSL https://raw.githubusercontent.com/gigad1k/XOS/main/install/boot.sh | bash
 ```
 
-`boot.sh` works out where it is. On the install media it stops and shows you
-what to run, because the next step erases a disk and that should be typed by
-somebody who has read the sentence saying so.
+`boot.sh` works out where it is. On install media it stops and shows you what to
+run, because the next step erases a disk and that should be typed by somebody who
+has read the sentence saying so.
 
 ```
 # see the plan, change nothing:
@@ -84,7 +128,13 @@ somebody who has read the sentence saying so.
 
 Then reboot.
 
-`base.sh` is the only file in XOS that destroys data. It shows you the disk and
+This route has no prebuilt binaries on it, so driver resolution during the
+install is conservative: it installs what is safe on any machine rather than what
+the database says your card needs. The XOS medium is better for that reason.
+
+### The one file that destroys data
+
+Whichever route you take, `base.sh` is the only file in XOS that destroys data. It shows you the disk and
 everything on it, states that all of it will be gone, and refuses to run at all
 if nothing is attached to the prompt to say no.
 
@@ -501,6 +551,10 @@ is, and say what machine you tested on.
   could not get and carries on.
 - **One `confirmed` graphics row.** The GTX 1080. Everything else in the NVIDIA
   table is from documentation, not from somebody's machine.
-- **No XOS ISO.** You boot the Arch ISO and run the installer from it.
-- **Bundled wifi drivers are not on the media yet**, so the deepest wifi fallback
-  has nothing to try. It says so clearly rather than failing silently.
+- **The install medium has never been built or booted.** The archiso profile is
+  written and its own tests pass, but `mkarchiso` needs an Arch machine and there
+  has not been one. Both firmware paths, the boot menus and the bundled drivers
+  are unproven in the only way that counts.
+- **The bundled wifi drivers are built from the AUR at image-build time.** If the
+  AUR is unreachable or a package does not build, the medium is made without
+  them and says so, and the deepest wifi fallback then has nothing to try.
