@@ -3,6 +3,7 @@
 //! A thin client over xosd. It holds no intelligence of its own: every command
 //! is a JSON-RPC call over the daemon's Unix socket.
 
+mod bar;
 mod chat;
 mod socket;
 mod theme;
@@ -51,6 +52,12 @@ enum Command {
     /// Search, inspect and promote what XOS remembers.
     #[command(subcommand)]
     Memory(MemoryCommand),
+    /// Print the status bar as waybar JSON. Used by the bar, not by people.
+    Bar {
+        /// Print the expand panel instead of the bar line.
+        #[arg(long)]
+        panel: bool,
+    },
     /// The heartbeat: what it is doing and what it costs.
     #[command(subcommand)]
     Pulse(PulseCommand),
@@ -215,6 +222,7 @@ fn main() -> std::process::ExitCode {
         Command::Journal { goal, tool, limit } => {
             vault::journal(&mut connection, goal.as_deref(), tool.as_deref(), limit)
         }
+        Command::Bar { panel } => bar::run(&mut connection, panel),
         Command::Pulse(command) => match command {
             PulseCommand::Status => vault::pulse_status(&mut connection),
             PulseCommand::Tasks => vault::pulse_tasks(&mut connection),

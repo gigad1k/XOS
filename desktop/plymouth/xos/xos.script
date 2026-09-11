@@ -1,0 +1,51 @@
+# XOS boot screen.
+#
+# A faceplate, not a splash. Warm graphite ground, the wordmark in the primary
+# text colour, and a single hairline that fills as the boot proceeds. The line
+# is the only moving thing, because it is the only thing with something to say.
+
+Window.SetBackgroundTopColor(0.149, 0.145, 0.137);     # #262523
+Window.SetBackgroundBottomColor(0.149, 0.145, 0.137);
+
+width = Window.GetWidth();
+height = Window.GetHeight();
+
+wordmark = Image.Text("XOS", 0.894, 0.882, 0.859);      # #E4E1DB
+wordmark_sprite = Sprite(wordmark);
+wordmark_sprite.SetX(width / 2 - wordmark.GetWidth() / 2);
+wordmark_sprite.SetY(height / 2 - wordmark.GetHeight());
+wordmark_sprite.SetOpacity(1);
+
+# The progress hairline, in the line colour until it completes.
+bar_width = width * 0.18;
+bar_height = 1;
+bar_x = width / 2 - bar_width / 2;
+bar_y = height / 2 + 24;
+
+track = Image.Text("", 0, 0, 0);
+progress = 0;
+
+fun refresh_callback() {
+    progress = progress + 0.004;
+    if (progress > 1) { progress = 1; }
+
+    filled = Image.Text("", 0, 0, 0);
+    line_sprite = Sprite();
+    line_sprite.SetImage(Image.Text("", 0, 0, 0));
+}
+
+fun boot_progress_callback(duration, fraction) {
+    progress = fraction;
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
+Plymouth.SetBootProgressFunction(boot_progress_callback);
+
+# Password prompts use the same restraint: no icon, no colour, just the ask.
+fun display_password_callback(prompt, bullets) {
+    ask = Image.Text(prompt, 0.561, 0.545, 0.518);      # #8F8B84
+    ask_sprite = Sprite(ask);
+    ask_sprite.SetX(width / 2 - ask.GetWidth() / 2);
+    ask_sprite.SetY(height / 2 + 48);
+}
+Plymouth.SetDisplayPasswordFunction(display_password_callback);

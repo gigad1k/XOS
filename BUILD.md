@@ -14,7 +14,7 @@
 | 10 | P8 | Supervisor | done | |
 | 11 | P9 | XOS Goals, the task graph | done | |
 | 12 | P10 | XOS Pulse and power management | done | |
-| 13 | P11 | Status bar and desktop theme | in-progress | |
+| 13 | P11 | Status bar and desktop theme | done | |
 | 14 | P12 | Mission Control | todo | |
 | 15 | HW-1 | Hardware detection | todo | |
 | 16 | HW-2 | Driver resolution and installation | todo | *GATE* |
@@ -350,3 +350,34 @@ real disks.
   the heartbeat passes the policy engine and the router exactly as one started by
   hand. A halted system still ticks, so status stays truthful, and advances
   nothing.
+
+- P11 — done. Check passed: the bar renders as waybar JSON, showed 190 tok/s
+  live during a generation and dropped it afterwards, turned red with "1 need
+  you" when a node reached needs-user, opened the expand panel, and went to the
+  stop colour reading "halted — click to resume" when halted.
+- The check found a real gap on the way. Node execution was judged as the
+  literal tool `execute_node`, which is always allowed, so a node could never
+  reach needs-user at all. Nodes are now judged on what the step actually does,
+  so "delete the old release" prompts exactly as the tool call would. The state
+  machine had a state nothing could enter, which is worse than a state that
+  behaves wrongly, because nothing fails visibly.
+- Quiet when idle is enforced in code, not just intended: with nothing running,
+  nothing spent and nothing blocked, the bar reads "local" and nothing else.
+  There is a test for it, because a bar that is always busy becomes wallpaper and
+  then goes unread on the one occasion it matters.
+- Colour is meaning only. There are exactly four classes — local, api, blocked,
+  halted — and a test asserts that a fifth would mean a fourth hue. Red appears
+  only for work needing a person or spend over its cap.
+- The kill switch is bound in Hyprland to the CLI rather than to any running
+  application, so it works when a UI is not.
+- Shipped alongside: waybar config and stylesheet, Hyprland rules with 3px
+  radius and the local green active border, a Plymouth theme, terminal palettes
+  for Alacritty and foot, and an Open WebUI stylesheet. The terminal palettes map
+  the non-semantic ANSI slots to the neutral ramp rather than inventing five more
+  hues.
+- The Open WebUI stylesheet leaves the name and logo visible, and says why in a
+  comment: their licence requires it above 50 aggregate users. Restyling is fine;
+  passing it off as XOS is not.
+- Verification limit: there is no compositor on this machine, so waybar,
+  Hyprland and Plymouth rendering are unverified. What was verified is the data
+  the bar renders from and every branch that decides what it says.

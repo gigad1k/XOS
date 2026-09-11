@@ -86,6 +86,9 @@ pub struct Daemon {
     pub local_model: String,
     pub power: Arc<PowerManager>,
     pub energy: Arc<EnergyLog>,
+    /// Tokens and elapsed time for a reply currently streaming, so the status
+    /// bar can show a live rate. Cleared when the reply ends.
+    pub live: RwLock<Option<(Instant, u32)>>,
     pub version: &'static str,
 }
 
@@ -129,10 +132,22 @@ impl Daemon {
             pulse,
             power,
             energy,
+            live: RwLock::new(None),
             local_base_url,
             local_model,
             version: env!("CARGO_PKG_VERSION"),
         }
+    }
+
+    /// The rate of a reply streaming right now, if one is.
+    fn live_rate(&self) -> Option<f64> {
+        let live = self.live.read().ok()?;
+        let (started, tokens) = (*live)?;
+        let seconds = started.elapsed().as_secs_f64();
+        if seconds < 0.2 || tokens == 0 {
+            return None;
+        }
+        Some(tokens as f64 / seconds)
     }
 
     fn cost_mode(&self) -> CostMode {
@@ -365,6 +380,7 @@ async fn dispatch(
                 "halted": daemon.halt.is_halted(),
                 "tick_secs": daemon.pulse.config().tick_secs,
                 "idle_secs": daemon.power.idle_secs(),
+                "tokens_per_second": daemon.live_rate(),
                 "model_loaded": daemon.power.model_loaded(),
                 "machine": machine,
                 "summary": machine.summary(),
@@ -1326,6 +1342,9 @@ async fn run_attempt(
                         if !token.text.is_empty() {
                             first_token_seen = true;
                             tokens += 1;
+                            if let Ok(mut live) = daemon.live.write() {
+                                *live = Some((started, tokens));
+                            }
                             attempt.text.push_str(&token.text);
                             let note = json!({
                                 "jsonrpc": "2.0",
@@ -1380,6 +1399,10 @@ async fn run_attempt(
         }
     }
 
+    // The reply has ended, so there is no live rate any more.
+    if let Ok(mut live) = daemon.live.write() {
+        *live = None;
+    }
     Ok(attempt)
 }
 
@@ -1737,9 +1760,18 @@ pub async fn run_eligible(
 
     let mut ran = Vec::new();
     for node in eligible.into_iter().take(limit.max(1)) {
-        // Policy first, exactly as a tool call would be judged.
+        // Policy first, and judged on what the step actually does rather than on
+        // the fact that it is a step. A node titled "delete the old release" has
+        // to reach a person the same way the tool call would.
+        let action = node
+            .title
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("_")
+            .to_lowercase();
         let decision = daemon.policy.evaluate(
-            "execute_node",
+            &action,
             &json!({"title": node.title, "detail": node.detail}),
             &PolicyContext {
                 local_only: daemon.cost_mode() == CostMode::AggressiveLocal,
@@ -1748,7 +1780,7 @@ pub async fn run_eligible(
         );
         let _ = daemon
             .policy_log
-            .record("execute_node", &node.title, &decision, "graph");
+            .record(&action, &node.title, &decision, "graph");
 
         match &decision {
             PolicyDecision::Block { reason } => {

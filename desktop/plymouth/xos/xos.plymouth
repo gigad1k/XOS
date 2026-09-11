@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=XOS
+Description=Boot screen in the XOS palette: warm graphite, one hairline, no decoration.
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/xos
+ScriptFile=/usr/share/plymouth/themes/xos/xos.script

@@ -1,0 +1,82 @@
+/* XOS status bar.
+ *
+ * Three semantic colours and nothing else. Green means local and free, amber
+ * means it is costing money, oxide red means it needs you. No hue is ever used
+ * for emphasis, decoration or category. Emphasis is weight and text against
+ * text-dim, exactly as STYLE.md requires.
+ */
+
+@define-color base       #262523;
+@define-color surface    #302E2B;
+@define-color surface-hi #3A3835;
+@define-color line       #454340;
+@define-color text       #E4E1DB;
+@define-color text-dim   #8F8B84;
+@define-color text-faint #66625C;
+
+@define-color local #7A9B6E;  /* running locally. free, private */
+@define-color api   #C8934A;  /* cloud API in use. costing money */
+@define-color stop  #A85445;  /* blocked, failed, needs you, over budget */
+
+* {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+}
+
+window#waybar {
+  background: @base;
+  color: @text;
+  border-bottom: 1px solid @line;
+}
+
+#custom-xos {
+  color: @text;
+  font-weight: 500;
+  padding: 0 12px;
+  border-right: 1px solid @line;
+}
+
+#workspaces button {
+  color: @text-faint;
+  padding: 0 8px;
+  border-radius: 3px;
+}
+#workspaces button.active  { color: @text; }
+#workspaces button:hover   { background: @surface-hi; }
+
+/* Machine data is mono, per STYLE.md 1.3. */
+#custom-xos-goal,
+#custom-xos-status,
+#clock {
+  font-family: "IBM Plex Mono", monospace;
+  color: @text-dim;
+  padding: 0 10px;
+}
+
+/* The tier colours. These are the whole palette. */
+#custom-xos-goal.local,  #custom-xos-status.local  { color: @local; }
+#custom-xos-goal.api,    #custom-xos-status.api    { color: @api; }
+#custom-xos-goal.blocked,#custom-xos-status.blocked{ color: @stop; }
+
+/* Halted takes the entire bar. Unmissable, unambiguous. */
+#custom-xos-goal.halted,
+#custom-xos-status.halted {
+  color: @base;
+  background: @stop;
+  font-weight: 500;
+  padding: 0 14px;
+}
+window#waybar.halted { background: @stop; }
+
+#clock { color: @text-dim; }
+
+tooltip {
+  background: @surface;
+  border: 1px solid @line;
+  border-radius: 3px;
+}
+tooltip label { color: @text; }

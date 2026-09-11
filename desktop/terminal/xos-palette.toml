@@ -1,0 +1,38 @@
+# XOS terminal palette, for Alacritty.
+#
+# The ANSI slots are a problem for a three-colour system: terminals expect eight
+# hues and XOS has three. The answer is not to invent five more. Everything that
+# is not local green, api amber or oxide red is rendered in the neutral ramp, so
+# a terminal in XOS looks like the rest of XOS rather than like a Christmas tree.
+#
+# Green, yellow and red keep their semantic meaning, which happens to line up
+# with what programs already use them for: success, warning, failure.
+
+[colors.primary]
+background = "#262523"
+foreground = "#E4E1DB"
+dim_foreground = "#8F8B84"
+
+[colors.cursor]
+text = "#262523"
+cursor = "#E4E1DB"
+
+[colors.normal]
+black   = "#302E2B"
+red     = "#A85445"   # --xos-stop
+green   = "#7A9B6E"   # --xos-local
+yellow  = "#C8934A"   # --xos-api
+blue    = "#8F8B84"   # neutral: no fourth hue
+magenta = "#8F8B84"
+cyan    = "#8F8B84"
+white   = "#E4E1DB"
+
+[colors.bright]
+black   = "#454340"
+red     = "#BC6152"
+green   = "#8BAE7E"
+yellow  = "#D9A45B"
+blue    = "#A9A49C"
+magenta = "#A9A49C"
+cyan    = "#A9A49C"
+white   = "#F2EFE9"

@@ -1,0 +1,49 @@
+// XOS status bar.
+//
+// Quiet when idle, loud when it matters. A bar that is always busy becomes
+// wallpaper, and then the one time it has something urgent to say nobody reads
+// it. Most of what could be shown appears only when it is true.
+{
+  "layer": "top",
+  "position": "top",
+  "height": 30,
+  "spacing": 0,
+
+  "modules-left": ["custom/xos", "hyprland/workspaces"],
+  "modules-center": ["custom/xos-goal"],
+  "modules-right": ["custom/xos-status", "clock"],
+
+  // The XOS button. Left opens the command palette, right opens Mission Control.
+  "custom/xos": {
+    "format": "XOS",
+    "tooltip": false,
+    "on-click": "xos-palette",
+    "on-click-right": "foot -a mission-control xos mission"
+  },
+
+  "hyprland/workspaces": {
+    "format": "{id}",
+    "persistent-workspaces": { "*": 4 }
+  },
+
+  // What the system is doing: goal and progress, where a taskbar would be.
+  "custom/xos-goal": {
+    "exec": "xos bar",
+    "return-type": "json",
+    "interval": 2,
+    "on-click": "xos bar --panel | foot -a xos-panel --hold cat"
+  },
+
+  // What it is costing, and whether it can be trusted.
+  "custom/xos-status": {
+    "exec": "xos bar",
+    "return-type": "json",
+    "interval": 2,
+    "on-click": "xos resume"
+  },
+
+  "clock": {
+    "format": "{:%H:%M}",
+    "tooltip-format": "{:%A %e %B}"
+  }
+}

@@ -1,0 +1,82 @@
+/* XOS theme for Open WebUI.
+ *
+ * Open WebUI is opt-in and spawns only when asked for; `xos chat` is the default
+ * interface. This makes it look like the rest of XOS when it is used.
+ *
+ * Licence note, and it is not optional: Open WebUI's licence requires its name
+ * and logo to remain visible above 50 aggregate users. Nothing here hides,
+ * recolours past recognition, or replaces the branding, and nothing added later
+ * should. Restyling a product is fine; passing it off as XOS is not.
+ */
+
+:root {
+  --xos-base: #262523;
+  --xos-surface: #302E2B;
+  --xos-surface-hi: #3A3835;
+  --xos-line: #454340;
+  --xos-text: #E4E1DB;
+  --xos-text-dim: #8F8B84;
+  --xos-text-faint: #66625C;
+
+  --xos-local: #7A9B6E;
+  --xos-api: #C8934A;
+  --xos-stop: #A85445;
+}
+
+html, body, .app, [data-theme] {
+  background-color: var(--xos-base) !important;
+  color: var(--xos-text) !important;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+
+code, pre, .font-mono, .text-xs.font-mono {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+/* Panels and inputs: surfaces, hairlines, 3px radius, no shadows. */
+.bg-gray-50, .bg-gray-100, .bg-gray-800, .bg-gray-850, .bg-gray-900,
+.dark\:bg-gray-800, .dark\:bg-gray-900, .modal, .card {
+  background-color: var(--xos-surface) !important;
+  border-color: var(--xos-line) !important;
+  border-radius: 3px !important;
+  box-shadow: none !important;
+}
+
+input, textarea, select, .input {
+  background-color: var(--xos-surface-hi) !important;
+  border: 1px solid var(--xos-line) !important;
+  border-radius: 3px !important;
+  color: var(--xos-text) !important;
+}
+
+hr, .border, .border-t, .border-b, .divide-y > * + * {
+  border-color: var(--xos-line) !important;
+}
+
+/* Semantic colour only. A primary button is not a reason for a hue: it gets
+ * weight and the primary text colour instead. */
+button, .btn {
+  border-radius: 3px !important;
+  box-shadow: none !important;
+}
+.btn-primary, button[type="submit"] {
+  background-color: var(--xos-surface-hi) !important;
+  color: var(--xos-text) !important;
+  font-weight: 500;
+}
+
+.text-green-500, .text-green-600, .bg-green-500 { color: var(--xos-local) !important; }
+.text-yellow-500, .text-amber-500             { color: var(--xos-api) !important; }
+.text-red-500, .text-red-600                  { color: var(--xos-stop) !important; }
+
+.text-gray-400, .text-gray-500 { color: var(--xos-text-dim) !important; }
+.text-gray-600, .text-gray-700 { color: var(--xos-text-faint) !important; }
+
+/* The Open WebUI name and logo stay visible and legible. Do not add rules that
+ * hide, crop or blank them. */
+.logo, .brand, img[alt*="Open WebUI" i], [class*="logo" i] {
+  display: revert !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  filter: none !important;
+}
