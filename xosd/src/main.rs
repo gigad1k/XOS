@@ -3,16 +3,153 @@
 //! Every other component is a thin client over this daemon's API. Nothing else
 //! imports a model provider, MCP server or channel gateway directly.
 
+mod config;
 mod graph;
 mod memory;
 mod policy;
 mod providers;
 mod router;
+mod rpc;
 mod scheduler;
 mod state;
 mod supervisor;
 mod vault;
 
-fn main() {
-    println!("xosd {} — no subsystems started. See BUILD.md for what lands next.", env!("CARGO_PKG_VERSION"));
+use std::process::ExitCode;
+use std::sync::Arc;
+
+use tokio::net::UnixListener;
+use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
+
+use config::{Config, ProviderConfig};
+use providers::llama_cpp::LlamaCppProvider;
+use providers::ProviderRegistry;
+use rpc::Daemon;
+use state::Halt;
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_env("XOS_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            error!(%error, "xosd stopped");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<(), String> {
+    let config_path = config::config_path();
+    let existed = config_path.exists();
+    let config = Config::load_or_create(&config_path)
+        .map_err(|e| format!("cannot read {}: {}", config_path.display(), e))?;
+    if existed {
+        info!(path = %config_path.display(), "config loaded");
+    } else {
+        info!(path = %config_path.display(), "config written with defaults");
+    }
+
+    let halt = Arc::new(Halt::load(config::halt_state_path()));
+    if halt.is_halted() {
+        warn!(
+            state = %halt.state_path().display(),
+            "starting halted. Autonomous work stays stopped until `xos resume`."
+        );
+    }
+
+    let mut registry = ProviderRegistry::new();
+    for (name, provider) in &config.providers {
+        match provider {
+            ProviderConfig::LlamaCpp(settings) => {
+                let provider = LlamaCppProvider::new(name, settings.clone())
+                    .map_err(|e| format!("provider `{}`: {}", name, e))?;
+                info!(
+                    provider = %name,
+                    model = %settings.model,
+                    prefix_cache = settings.slots > 0,
+                    "provider registered"
+                );
+                registry.insert(Arc::new(provider));
+            }
+        }
+    }
+    if registry.is_empty() {
+        warn!("no providers are configured; add one to the config file");
+    }
+    if registry.get(&config.default_provider).is_none() {
+        warn!(
+            default = %config.default_provider,
+            "the default provider is not configured; requests must name one"
+        );
+    }
+
+    let (socket_path, moved) = config.resolve_socket();
+    if let Some(reason) = moved {
+        warn!("{}", reason);
+    }
+    if let Some(parent) = socket_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // A socket file left by a crashed daemon would block the bind.
+    if socket_path.exists() {
+        if tokio::net::UnixStream::connect(&socket_path).await.is_ok() {
+            return Err(format!(
+                "another xosd is listening on {}",
+                socket_path.display()
+            ));
+        }
+        std::fs::remove_file(&socket_path)
+            .map_err(|e| format!("cannot clear {}: {}", socket_path.display(), e))?;
+    }
+
+    let listener = UnixListener::bind(&socket_path)
+        .map_err(|e| format!("cannot listen on {}: {}", socket_path.display(), e))?;
+    info!(socket = %socket_path.display(), "xosd listening");
+
+    let daemon = Arc::new(Daemon::new(
+        registry,
+        Arc::clone(&halt),
+        config.default_provider.clone(),
+    ));
+
+    tokio::select! {
+        _ = rpc::serve(listener, daemon) => {}
+        _ = shutdown() => {
+            info!("xosd stopping");
+        }
+    }
+
+    let _ = std::fs::remove_file(&socket_path);
+    Ok(())
+}
+
+/// Stop on Ctrl-C, or on SIGTERM when the service manager asks.
+async fn shutdown() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(signal) => signal,
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

@@ -4,7 +4,7 @@
 |---|---|---|---|---|
 | 1 | P0 | Repository scaffold | done | |
 | 2 | P1 | XOS Bench — tool-call harness | done | *GATE* |
-| 3 | P2 | xosd skeleton, provider trait, halt primitive | in-progress | |
+| 3 | P2 | xosd skeleton, provider trait, halt primitive | done | |
 | 4 | P3 | xos chat TUI | todo | |
 | 5 | P4 | XOS Vault and cloud providers | todo | |
 | 6 | P5 | Router and escalation log | todo | *GATE* |
@@ -72,3 +72,30 @@ real disks.
 - `xos-bench-results.json` is the default output and is not in `.gitignore`.
   P1's guardrail forbids touching files outside xos-bench/, so a later task that
   legitimately edits `.gitignore` should add it.
+
+- P2 — done. Check passed: `cargo run --bin xosd` starts, writes
+  `~/.config/xos/config.toml` on first run, and a JSON-RPC `health` call over the
+  socket returns `{"status":"ok"}`. Verified end to end alongside halt, resume,
+  status, an unknown-method refusal and a restart.
+- Socket: `/run/xosd.sock` is the configured default. When that directory is not
+  writable, which is every developer run, the daemon falls back to the runtime
+  directory and logs a warning naming the new path rather than moving silently.
+  The CLI tries the same candidates in the same order, so no flag is needed.
+- Halt is an `AtomicBool` plus a broadcast channel, never a mutex, so a
+  completion holding a lock cannot delay it. Order is flag, then waiters, then
+  disk, so a slow disk cannot either. `Halt::guard()` is the call every later
+  subsystem must make before acting; `rpc::complete` already uses it, and a
+  completion in flight is cancelled through `Halt::subscribe()`.
+- Every connection gets its own task, which is what makes halt dependable: a
+  halt never queues behind a running completion.
+- Streaming protocol for P3: `complete` emits `complete.delta` notifications
+  carrying `{id, text}`, then the final result with text, finish reason and
+  usage. The TUI can render token by token without a second protocol.
+- Prefix caching: `cache_key` pins to a llama.cpp slot and sends `cache_prompt`
+  with `id_slot`. `slots = 0` disables it, which is correct for Ollama, so
+  `supports_prefix_cache` reports false there. P8's compiled prompts need a
+  llama.cpp server started with slots to get the latency win.
+- `ProviderError` carries only Transport and Http. Speculative variants were
+  removed rather than silenced; add them when a caller needs one.
+- The CLI treats a closed pipe as a normal end, so `xos status | head` does not
+  panic. The first run of the check found that by piping into head.
