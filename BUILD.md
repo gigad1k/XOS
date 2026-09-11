@@ -18,7 +18,7 @@
 | 14 | P12 | Mission Control | done | |
 | 15 | HW-1 | Hardware detection | done | |
 | 16 | HW-2 | Driver resolution and installation | done | *GATE* |
-| 17 | P13 | Installer | todo | *GATE* |
+| 17 | P13 | Installer | in-progress | *GATE* |
 | 18 | P14 | First-run experience and first goal | todo | |
 
 ## Status values
