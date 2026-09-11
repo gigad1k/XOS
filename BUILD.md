@@ -3,7 +3,7 @@
 | # | ID | Task | Status | Gate |
 |---|---|---|---|---|
 | 1 | P0 | Repository scaffold | done | |
-| 2 | P1 | XOS Bench — tool-call harness | in-progress | *GATE* |
+| 2 | P1 | XOS Bench — tool-call harness | done | *GATE* |
 | 3 | P2 | xosd skeleton, provider trait, halt primitive | todo | |
 | 4 | P3 | xos chat TUI | todo | |
 | 5 | P4 | XOS Vault and cloud providers | todo | |
@@ -48,3 +48,27 @@ real disks.
   `-p`; subsystem modules are `src/<name>/mod.rs` directories, so files can be
   added without moving anything.
 - LICENSE holder is "XOS contributors", a placeholder. Set a real name if wanted.
+
+- P1 — done. Check passed: `cargo run --bin xos-bench -- --url http://localhost:11434/v1`
+  prints the table with a tool-call success percentage and exits 0. The harness
+  ships 50 cases, ten in each of the five shapes, and works with no endpoint
+  running: failures are recorded per case and the table still prints.
+- P1 GATE — the routing decision is NOT resolved. The spec's ~85% and ~70%
+  thresholds concern Gemma 4 E4B on a GTX 1080. Neither was available: this
+  machine is an RTX 5090 with 32GB and no Gemma 4 E4B is installed, so the
+  measurement that sets the router's defaults still has to be run on the target
+  box. Until it is, P5 should treat its thresholds as provisional.
+- P1 evidence that the harness discriminates, taken on the RTX 5090 against what
+  Ollama had: qwen3.6:27b scored 100% (50/50, every category, multi-turn
+  included); llama3.2 scored 18% (9/50), failing every multi-turn case by
+  answering in prose after step one and calling tools on 9 of 10 refusal cases.
+  A harness that separates those two is measuring the right thing.
+- Measurement caveat for P5: decode tok/s is unreliable against Ollama, which
+  buffers short tool-call replies into one burst, leaving a decode window of a
+  millisecond or two. Cases with a window under 50ms are excluded rather than
+  reported as thousands of tokens per second. Trust the end-to-end figure.
+- A warm-up request runs before the suite; without it the first case absorbed a
+  33 second model load. Disable with `--no-warmup`.
+- `xos-bench-results.json` is the default output and is not in `.gitignore`.
+  P1's guardrail forbids touching files outside xos-bench/, so a later task that
+  legitimately edits `.gitignore` should add it.
