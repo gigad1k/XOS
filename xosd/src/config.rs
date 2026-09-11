@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::providers::anthropic::AnthropicConfig;
 use crate::providers::llama_cpp::LlamaCppConfig;
+use crate::memory::embed::EmbedderConfig;
 use crate::providers::openai::OpenAiConfig;
 use crate::router::RouterConfig;
 use crate::spend::Caps;
@@ -48,6 +49,49 @@ pub struct Config {
     /// Which tier serves what, and the thresholds that move a request.
     #[serde(default)]
     pub router: RouterConfig,
+    /// How memory turns text into vectors for recall.
+    #[serde(default)]
+    pub embedder: EmbedderConfig,
+    /// Scheduled export. Off unless asked for.
+    #[serde(default)]
+    pub export: ExportConfig,
+}
+
+/// A scheduled, encrypted export of everything XOS remembers.
+///
+/// Off by default, because it writes your memory to a path you chose and needs
+/// a passphrase to do it. The passphrase is read from an environment variable
+/// rather than stored in the config, so the config stays safe to copy around.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    #[serde(default = "default_export_hours")]
+    pub every_hours: u64,
+    /// Environment variable holding the passphrase.
+    #[serde(default = "default_passphrase_env")]
+    pub passphrase_env: String,
+}
+
+fn default_export_hours() -> u64 {
+    24
+}
+
+fn default_passphrase_env() -> String {
+    "XOS_EXPORT_PASSPHRASE".to_string()
+}
+
+impl Default for ExportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: None,
+            every_hours: default_export_hours(),
+            passphrase_env: default_passphrase_env(),
+        }
+    }
 }
 
 fn default_socket() -> PathBuf {
@@ -71,6 +115,8 @@ impl Default for Config {
             providers,
             caps: Caps::default(),
             router: RouterConfig::default(),
+            embedder: EmbedderConfig::default(),
+            export: ExportConfig::default(),
         }
     }
 }
@@ -88,6 +134,14 @@ pub fn vault_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("xos")
+}
+
+/// Where memory lives.
+pub fn memory_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("memory.db")
 }
 
 /// The escalation log database.

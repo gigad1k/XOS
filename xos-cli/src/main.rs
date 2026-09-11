@@ -48,11 +48,48 @@ enum Command {
         /// Leave empty to report the current mode.
         mode: Option<String>,
     },
+    /// Search, inspect and promote what XOS remembers.
+    #[command(subcommand)]
+    Memory(MemoryCommand),
+    /// Write an encrypted bundle of everything XOS remembers.
+    Export { path: String },
+    /// Merge a bundle back in. Nothing already here is overwritten.
+    Import { path: String },
     /// Report what each provider has cost, by day.
     Spend {
         /// How many days back to report.
         #[arg(long, default_value_t = 7)]
         days: u32,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MemoryCommand {
+    /// Search across every tier, or one of them.
+    Search {
+        query: Vec<String>,
+        /// working, session or long-term.
+        #[arg(long)]
+        tier: Option<String>,
+        #[arg(long, default_value_t = 10)]
+        limit: u32,
+    },
+    /// Count what is held in each tier.
+    Stats,
+    /// Remember something directly.
+    Write {
+        content: Vec<String>,
+        #[arg(long, default_value = "working")]
+        tier: String,
+        #[arg(long, default_value = "")]
+        tags: String,
+    },
+    /// Close a task or a day: summarise one tier into the next.
+    Promote {
+        #[arg(long, default_value = "working")]
+        from: String,
+        #[arg(long)]
+        to: Option<String>,
     },
 }
 
@@ -97,6 +134,22 @@ fn main() -> std::process::ExitCode {
         Command::Status => status(&mut connection),
         Command::Spend { days } => vault::spend(&mut connection, days),
         Command::Escalations { limit } => vault::escalations(&mut connection, limit),
+        Command::Export { path } => vault::export(&mut connection, &path),
+        Command::Import { path } => vault::import(&mut connection, &path),
+        Command::Memory(command) => match command {
+            MemoryCommand::Search { query, tier, limit } => {
+                vault::memory_search(&mut connection, &query.join(" "), tier.as_deref(), limit)
+            }
+            MemoryCommand::Stats => vault::memory_stats(&mut connection),
+            MemoryCommand::Write {
+                content,
+                tier,
+                tags,
+            } => vault::memory_write(&mut connection, &tier, &content.join(" "), &tags),
+            MemoryCommand::Promote { from, to } => {
+                vault::memory_promote(&mut connection, &from, to.as_deref())
+            }
+        },
         Command::Mode { mode } => vault::mode(&mut connection, mode.as_deref()),
         Command::Vault(command) => match command {
             VaultCommand::Add { provider } => vault::add(&mut connection, &provider),

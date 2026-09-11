@@ -8,7 +8,7 @@
 | 4 | P3 | xos chat TUI | done | |
 | 5 | P4 | XOS Vault and cloud providers | done | |
 | 6 | P5 | Router and escalation log | done | *GATE* |
-| 7 | P6 | XOS Memory, export and import | in-progress | |
+| 7 | P6 | XOS Memory, export and import | done | |
 | 8 | P7 | Policy engine and egress protection | todo | *GATE* |
 | 9 | P7b | Action journal and undo | todo | *GATE* |
 | 10 | P8 | Supervisor | todo | |
@@ -171,3 +171,34 @@ real disks.
 - Routing lives only in the router module. Providers were not told about tiers,
   and the Provider trait is unchanged. `Token` gained an optional `logprob`,
   which is the only way the model's own probabilities can reach the router.
+
+- P6 — done. Check passed: three entries written to working memory, the task
+  closed, the local model summarised them into session, working left empty, and
+  `xos memory search` returned the summary. Export and import were exercised
+  too: the bundle is age ciphertext at 0600, re-importing it added nothing and
+  kept what was already here, a wrong passphrase was refused, and a fresh
+  machine restored the memory and searched it.
+- DEVIATION from the prompt: sqlite-vec is not used. Vectors are stored as f32
+  BLOBs and cosine similarity is computed in Rust over the rows of the tier
+  being searched. The reason is that sqlite-vec is a loadable extension, which
+  means shipping and loading a native library on every target machine including
+  the decade-old ones, for a corpus that is thousands of rows on a personal box
+  where a linear scan is microseconds. Revisit when a real corpus makes the scan
+  measurable; the storage format does not have to change to do it.
+- The default embedder is lexical: hashed character trigrams, in process, no GPU
+  contention, stable across runs. It matches wording, not meaning. It will find
+  "ssh key path" from "ssh key" and will not find it from "the thing I log in
+  with". A remote OpenAI-compatible embeddings endpoint can be configured when
+  recall quality matters more than having no moving parts, and `xos memory stats`
+  names which is in use so the limitation is never invisible.
+- Promotion quality is the local model's quality. llama3.2 produced a usable
+  summary but embellished it with advice nobody asked for. On the target box
+  this is Gemma 4 E4B's job, and it is worth re-reading a promoted summary once
+  before trusting the tier.
+- Export carries provider names, never key material, by construction: the bundle
+  type has no field a key could travel in, and import tells you which providers
+  to reconnect. Import merges and never overwrites, so restoring an old bundle
+  onto a live machine cannot roll it backwards.
+- Scheduled export is off by default. When enabled it needs both a path and a
+  passphrase in the environment variable named in config; if either is missing
+  the daemon says so once at startup rather than silently writing nothing.

@@ -17,9 +17,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, info, warn};
 
-use crate::providers::{CompletionRequest, ProviderRegistry};
+use crate::memory::{bundle, Memory, Tier};
+use crate::providers::{CompletionRequest, Message, ProviderRegistry};
 use crate::router::log::{EscalationLog, Record};
-use crate::router::{self, CostMode, Observation, Router, Tier};
+use crate::router::{self, CostMode, Observation, Router, Tier as RouteTier};
 use crate::spend::{cost_of, SpendBook};
 use crate::state::Halt;
 use crate::vault::Vault;
@@ -62,6 +63,7 @@ pub struct Daemon {
     /// itself takes a read, which never blocks another completion.
     pub router: RwLock<Router>,
     pub escalations: Arc<EscalationLog>,
+    pub memory: Arc<Memory>,
     pub version: &'static str,
 }
 
@@ -74,6 +76,7 @@ impl Daemon {
         spend: Arc<SpendBook>,
         router: Router,
         escalations: Arc<EscalationLog>,
+        memory: Arc<Memory>,
     ) -> Self {
         Self {
             registry,
@@ -83,6 +86,7 @@ impl Daemon {
             spend,
             router: RwLock::new(router),
             escalations,
+            memory,
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -267,6 +271,147 @@ async fn dispatch(
                 Ok(()) => Some(json!({"provider": provider, "removed": true})),
                 Err(error) => {
                     let body = failure(request.id.clone(), INVALID_PARAMS, &error.to_string());
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "memory.write" => {
+            let tier = request
+                .params
+                .get("tier")
+                .and_then(Value::as_str)
+                .and_then(Tier::parse)
+                .unwrap_or(Tier::Working);
+            let content = request
+                .params
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let tags = request
+                .params
+                .get("tags")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let source = request
+                .params
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("rpc");
+            match daemon.memory.write(tier, content, tags, source) {
+                Ok(id) => Some(json!({"id": id, "tier": tier.label()})),
+                Err(error) => {
+                    let body = failure(request.id.clone(), INVALID_PARAMS, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "memory.recall" => {
+            let query = request
+                .params
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let tier = request
+                .params
+                .get("tier")
+                .and_then(Value::as_str)
+                .and_then(Tier::parse);
+            let limit = request
+                .params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(10) as usize;
+            match daemon.memory.recall(query, tier, limit) {
+                Ok(hits) => Some(json!({"hits": hits})),
+                Err(error) => {
+                    let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "memory.stats" => match daemon.memory.stats() {
+            Ok(stats) => Some(json!({
+                "tiers": stats,
+                "embedder": daemon.memory.embedder().label(),
+            })),
+            Err(error) => {
+                let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                let _ = write_line(writer, &body).await;
+                None
+            }
+        },
+
+        "memory.promote" => promote(request, daemon, writer).await,
+
+        "memory.export" => {
+            let path = request
+                .params
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let passphrase = request
+                .params
+                .get("passphrase")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let entries = daemon.memory.all().unwrap_or_default();
+            let count = entries.len();
+            // Names only. The vault is not read here, and could not be put in
+            // the bundle if it were.
+            let providers = daemon.vault.list().unwrap_or_default();
+            let bundle = bundle::Bundle::new(entries, Value::Null, providers);
+            match bundle::export(std::path::Path::new(path), &bundle, passphrase) {
+                Ok(()) => {
+                    info!(path = %path, entries = count, "exported");
+                    Some(json!({"path": path, "entries": count}))
+                }
+                Err(error) => {
+                    let body = failure(request.id.clone(), INVALID_PARAMS, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "memory.import" => {
+            let path = request
+                .params
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let passphrase = request
+                .params
+                .get("passphrase")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match bundle::import(std::path::Path::new(path), passphrase) {
+                Ok(bundle) => {
+                    let offered = bundle.memory.len();
+                    match daemon.memory.merge(&bundle.memory) {
+                        Ok(added) => {
+                            info!(path = %path, added, "imported");
+                            Some(json!({
+                                "offered": offered,
+                                "added": added,
+                                "kept": offered - added,
+                                "providers_to_reconnect": bundle.vault_providers,
+                            }))
+                        }
+                        Err(error) => {
+                            let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                            let _ = write_line(writer, &body).await;
+                            None
+                        }
+                    }
+                }
+                Err(error) => {
+                    let body = failure(request.id.clone(), INVALID_PARAMS, &error);
                     let _ = write_line(writer, &body).await;
                     None
                 }
@@ -497,11 +642,11 @@ async fn complete(
     // An explicitly named provider wins: the caller has already decided.
     let mut name = match (&params.provider, decision.tier) {
         (Some(explicit), _) => explicit.clone(),
-        (None, Tier::Api) => match &api_name {
+        (None, RouteTier::Api) => match &api_name {
             Some(api) => api.clone(),
             None => local_name.clone(),
         },
-        (None, Tier::Local) => local_name.clone(),
+        (None, RouteTier::Local) => local_name.clone(),
     };
     if params.provider.is_none() && decision.escalated() {
         info!(
@@ -739,6 +884,148 @@ async fn run_attempt(
     }
 
     Ok(attempt)
+}
+
+/// Promote one tier into the next, summarising with the local model.
+///
+/// Closing a task summarises working into session; closing a day distils
+/// session into long-term. The summary is made on this machine, so promotion
+/// costs nothing and sends nothing anywhere.
+async fn promote(
+    request: &Request,
+    daemon: &Arc<Daemon>,
+    writer: &mut (impl AsyncWriteExt + Unpin + Send),
+) -> Option<Value> {
+    let from = request
+        .params
+        .get("from")
+        .and_then(Value::as_str)
+        .and_then(Tier::parse)
+        .unwrap_or(Tier::Working);
+    let to = request
+        .params
+        .get("to")
+        .and_then(Value::as_str)
+        .and_then(Tier::parse)
+        .unwrap_or(match from {
+            Tier::Working => Tier::Session,
+            _ => Tier::LongTerm,
+        });
+
+    let entries = match daemon.memory.entries(from) {
+        Ok(entries) => entries,
+        Err(error) => {
+            let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+            let _ = write_line(writer, &body).await;
+            return None;
+        }
+    };
+    if entries.is_empty() {
+        return Some(json!({
+            "promoted": false,
+            "reason": format!("{} memory is empty, so there is nothing to promote", from.label()),
+        }));
+    }
+
+    let joined: Vec<String> = entries
+        .iter()
+        .map(|entry| format!("- {}", entry.content))
+        .collect();
+    let instruction = match to {
+        Tier::LongTerm => "Distil these notes from today into the few facts worth keeping \
+                           permanently: preferences, decisions, and anything about how this \
+                           person works. Drop anything that was only true for today.",
+        _ => "Summarise these working notes into a short record of what was done and \
+              decided. Keep names, paths and numbers exactly as written.",
+    };
+    let prompt = format!(
+        "{}\n\nWrite plain prose, at most six lines, with no preamble.\n\n{}",
+        instruction,
+        joined.join("\n")
+    );
+
+    // Summarisation is local work by design.
+    let local = daemon
+        .router
+        .read()
+        .ok()
+        .map(|router| router.config().local.clone())
+        .unwrap_or_else(|| daemon.default_provider.clone());
+    let provider = match daemon.registry.get(&local) {
+        Some(provider) => provider,
+        None => {
+            let body = failure(
+                request.id.clone(),
+                INVALID_PARAMS,
+                &format!("no local provider named `{}` to summarise with", local),
+            );
+            let _ = write_line(writer, &body).await;
+            return None;
+        }
+    };
+
+    let mut stream = match provider
+        .complete(CompletionRequest {
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: prompt,
+            }],
+            // A stable key: the same kind of work every time, so the prefix
+            // stays warm across promotions.
+            cache_key: Some(format!("promote-{}-to-{}", from.label(), to.label())),
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(stream) => stream,
+        Err(error) => {
+            let body = failure(request.id.clone(), INTERNAL_ERROR, &error.to_string());
+            let _ = write_line(writer, &body).await;
+            return None;
+        }
+    };
+
+    let mut summary = String::new();
+    while let Some(token) = futures_util::StreamExt::next(&mut stream).await {
+        match token {
+            Ok(token) => summary.push_str(&token.text),
+            Err(error) => {
+                let body = failure(request.id.clone(), INTERNAL_ERROR, &error.to_string());
+                let _ = write_line(writer, &body).await;
+                return None;
+            }
+        }
+    }
+
+    let summary = summary.trim().to_string();
+    if summary.is_empty() {
+        let body = failure(
+            request.id.clone(),
+            INTERNAL_ERROR,
+            "the local model returned an empty summary, so nothing was promoted",
+        );
+        let _ = write_line(writer, &body).await;
+        return None;
+    }
+
+    match daemon.memory.promote(from, to, &summary) {
+        Ok(id) => {
+            info!(from = from.label(), to = to.label(), "promoted");
+            Some(json!({
+                "promoted": true,
+                "id": id,
+                "from": from.label(),
+                "to": to.label(),
+                "summarised": entries.len(),
+                "summary": summary,
+            }))
+        }
+        Err(error) => {
+            let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+            let _ = write_line(writer, &body).await;
+            None
+        }
+    }
 }
 
 fn failure(id: Option<Value>, code: i32, message: &str) -> Value {

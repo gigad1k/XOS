@@ -28,6 +28,7 @@ use providers::anthropic::AnthropicProvider;
 use providers::llama_cpp::LlamaCppProvider;
 use providers::openai::OpenAiCompatibleProvider;
 use providers::ProviderRegistry;
+use memory::Memory;
 use router::log::EscalationLog;
 use router::Router;
 use rpc::Daemon;
@@ -165,6 +166,12 @@ async fn run() -> Result<(), String> {
     }
     let router = Router::new(router_config, local_context_window);
 
+    let memory = Arc::new(
+        Memory::open(&config::memory_path(), config.embedder.clone())
+            .map_err(|e| format!("memory: {}", e))?,
+    );
+    info!(embedder = %memory.embedder().label(), "memory opened");
+
     let escalations = Arc::new(
         EscalationLog::open(&config::escalations_path())
             .map_err(|e| format!("escalation log: {}", e))?,
@@ -178,7 +185,12 @@ async fn run() -> Result<(), String> {
         spend,
         router,
         escalations,
+        Arc::clone(&memory),
     ));
+
+    if config.export.enabled {
+        spawn_scheduled_export(config.clone(), Arc::clone(&memory));
+    }
 
     tokio::select! {
         _ = rpc::serve(listener, daemon) => {}
@@ -189,6 +201,57 @@ async fn run() -> Result<(), String> {
 
     let _ = std::fs::remove_file(&socket_path);
     Ok(())
+}
+
+/// Write an encrypted bundle on a timer, when asked to in config.
+///
+/// A dead disk should cost you nothing, but only if the export actually runs,
+/// so this says out loud when it cannot: a missing path or passphrase is
+/// reported once at startup rather than silently doing nothing for months.
+fn spawn_scheduled_export(config: Config, memory: Arc<Memory>) {
+    let Some(path) = config.export.path.clone() else {
+        warn!("scheduled export is enabled but no path is set, so nothing will be written");
+        return;
+    };
+    if std::env::var(&config.export.passphrase_env).is_err() {
+        warn!(
+            variable = %config.export.passphrase_env,
+            "scheduled export is enabled but the passphrase variable is unset, so nothing will be written"
+        );
+        return;
+    }
+
+    let hours = config.export.every_hours.max(1);
+    info!(path = %path.display(), every_hours = hours, "scheduled export is on");
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(hours * 3600));
+        // The first tick fires immediately; skip it so startup is not a write.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let passphrase = match std::env::var(&config.export.passphrase_env) {
+                Ok(passphrase) => passphrase,
+                Err(_) => continue,
+            };
+            let entries = match memory.all() {
+                Ok(entries) => entries,
+                Err(error) => {
+                    warn!(%error, "scheduled export could not read memory");
+                    continue;
+                }
+            };
+            let bundle = memory::bundle::Bundle::new(
+                entries,
+                serde_json::to_value(&config).unwrap_or(serde_json::Value::Null),
+                Vec::new(),
+            );
+            match memory::bundle::export(&path, &bundle, &passphrase) {
+                Ok(()) => info!(path = %path.display(), "exported"),
+                Err(error) => warn!(%error, "scheduled export failed"),
+            }
+        }
+    });
 }
 
 /// Stop on Ctrl-C, or on SIGTERM when the service manager asks.

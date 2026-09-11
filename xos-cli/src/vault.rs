@@ -218,3 +218,175 @@ pub fn mode(connection: &mut Connection, wanted: Option<&str>) -> Result<String,
         None => format!("{}\n", mode),
     })
 }
+
+/// `xos memory search`
+pub fn memory_search(
+    connection: &mut Connection,
+    query: &str,
+    tier: Option<&str>,
+    limit: u32,
+) -> Result<String, String> {
+    let mut params = json!({"query": query, "limit": limit});
+    if let Some(tier) = tier {
+        params["tier"] = json!(tier);
+    }
+    let result = connection.call("memory.recall", params)?;
+    let hits = result
+        .get("hits")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if hits.is_empty() {
+        let _ = writeln!(out, "Nothing matches `{}` yet.", query);
+        return Ok(out);
+    }
+    let _ = writeln!(out, "{:<10} {:>6}  {}", "tier", "score", "content");
+    for hit in &hits {
+        let content = hit.get("content").and_then(Value::as_str).unwrap_or("");
+        let one_line: String = content.split('\n').collect::<Vec<_>>().join(" ");
+        let _ = writeln!(
+            out,
+            "{:<10} {:>6.2}  {}",
+            hit.get("tier").and_then(Value::as_str).unwrap_or("-"),
+            hit.get("score").and_then(Value::as_f64).unwrap_or(0.0),
+            one_line
+        );
+    }
+    Ok(out)
+}
+
+/// `xos memory stats`
+pub fn memory_stats(connection: &mut Connection) -> Result<String, String> {
+    let result = connection.call("memory.stats", json!({}))?;
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "embedder  {}",
+        result.get("embedder").and_then(Value::as_str).unwrap_or("-")
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "{:<12} {:>8}", "tier", "entries");
+    for tier in result
+        .get("tiers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let _ = writeln!(
+            out,
+            "{:<12} {:>8}",
+            tier.get("tier").and_then(Value::as_str).unwrap_or("-"),
+            tier.get("entries").and_then(Value::as_i64).unwrap_or(0)
+        );
+    }
+    Ok(out)
+}
+
+/// `xos memory write`
+pub fn memory_write(
+    connection: &mut Connection,
+    tier: &str,
+    content: &str,
+    tags: &str,
+) -> Result<String, String> {
+    connection.call(
+        "memory.write",
+        json!({"tier": tier, "content": content, "tags": tags, "source": "cli"}),
+    )?;
+    Ok(format!("Remembered, in {} memory.\n", tier))
+}
+
+/// `xos memory promote` — close a task or a day.
+pub fn memory_promote(
+    connection: &mut Connection,
+    from: &str,
+    to: Option<&str>,
+) -> Result<String, String> {
+    let mut params = json!({"from": from});
+    if let Some(to) = to {
+        params["to"] = json!(to);
+    }
+    let result = connection.call("memory.promote", params)?;
+    if !result
+        .get("promoted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let reason = result
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("nothing to promote");
+        return Ok(format!("{}\n", reason));
+    }
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Summarised {} {} entries into {}.",
+        result.get("summarised").and_then(Value::as_i64).unwrap_or(0),
+        result.get("from").and_then(Value::as_str).unwrap_or("-"),
+        result.get("to").and_then(Value::as_str).unwrap_or("-")
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "{}",
+        result.get("summary").and_then(Value::as_str).unwrap_or("")
+    );
+    Ok(out)
+}
+
+/// `xos export`
+pub fn export(connection: &mut Connection, path: &str) -> Result<String, String> {
+    let passphrase = read_secret("Passphrase for the bundle: ")?;
+    if passphrase.trim().is_empty() {
+        return Err("a bundle needs a passphrase; it holds your memory".to_string());
+    }
+    let result = connection.call(
+        "memory.export",
+        json!({"path": path, "passphrase": passphrase}),
+    )?;
+    Ok(format!(
+        "Wrote {} memory entries to {}. Keep the passphrase: without it the bundle is scrap.\n",
+        result.get("entries").and_then(Value::as_i64).unwrap_or(0),
+        path
+    ))
+}
+
+/// `xos import`
+pub fn import(connection: &mut Connection, path: &str) -> Result<String, String> {
+    let passphrase = read_secret("Passphrase for the bundle: ")?;
+    let result = connection.call(
+        "memory.import",
+        json!({"path": path, "passphrase": passphrase}),
+    )?;
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Merged {} new entries, kept {} this machine already had.",
+        result.get("added").and_then(Value::as_i64).unwrap_or(0),
+        result.get("kept").and_then(Value::as_i64).unwrap_or(0)
+    );
+    let providers = result
+        .get("providers_to_reconnect")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !providers.is_empty() {
+        let names: Vec<&str> = providers.iter().filter_map(Value::as_str).collect();
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "The bundle records credentials for: {}. Keys are never exported, so add them again with `xos vault add <provider>`.",
+            names.join(", ")
+        );
+    }
+    Ok(out)
+}
