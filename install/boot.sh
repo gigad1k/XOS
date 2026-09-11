@@ -2,7 +2,9 @@
 #
 # The one line that installs XOS.
 #
-#   curl -fsSL https://xos.sh/boot | bash
+#   curl -fsSL https://raw.githubusercontent.com/gigad1k/XOS/main/install/boot.sh | bash
+#
+# (There is no xos.sh yet. When there is, it will serve this file.)
 #
 # It works out where it is and does the right thing from there. On the live ISO
 # with nothing installed, that means partitioning a disk and putting Arch on it
@@ -16,7 +18,7 @@
 
 set -uo pipefail
 
-REPOSITORY="${XOS_REPOSITORY:-https://github.com/shahraznaz/XOS}"
+REPOSITORY="${XOS_REPOSITORY:-https://github.com/gigad1k/XOS}"
 BRANCH="${XOS_BRANCH:-main}"
 WORK="${XOS_WORK:-/tmp/xos-install}"
 

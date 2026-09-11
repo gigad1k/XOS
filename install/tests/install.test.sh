@@ -282,6 +282,14 @@ gemma = [e for e in db['entries'] if e['id'] == 'gemma-4-e4b'][0]
 raise SystemExit(0 if gemma['minimum_memory_mb'] <= 7800 else 1)
 " && echo 0 || echo 1)"
 
+# A URL that does not resolve fails at the very first step of somebody's
+# install, before anything has had a chance to tell them what XOS is. It pointed
+# at a repository that does not exist.
+check "boot.sh points at a repository that exists" "the one-line install would fail immediately" \
+  "$(grep -q 'github.com/gigad1k/XOS' "$INSTALL/boot.sh" && echo 0 || echo 1)"
+check "no placeholder host is offered as the way in" "xos.sh does not exist yet" \
+  "$(grep -E '^#   curl' "$INSTALL/boot.sh" | grep -q 'xos.sh' && echo 1 || echo 0)"
+
 printf '\nxosd installs on its own\n'
 
 ROOT7="$WORK/standalone"
