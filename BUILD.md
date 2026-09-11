@@ -10,7 +10,7 @@
 | 6 | P5 | Router and escalation log | done | *GATE* |
 | 7 | P6 | XOS Memory, export and import | done | |
 | 8 | P7 | Policy engine and egress protection | done | *GATE* |
-| 9 | P7b | Action journal and undo | in-progress | *GATE* |
+| 9 | P7b | Action journal and undo | done | *GATE* |
 | 10 | P8 | Supervisor | todo | |
 | 11 | P9 | XOS Goals, the task graph | todo | |
 | 12 | P10 | XOS Pulse and power management | todo | |
@@ -231,3 +231,33 @@ real disks.
   reason in the source. The first executor, in P9, must call it on every call.
 - Unverified: the local SearXNG rule is enforced and tested, but no SearXNG
   instance exists here to route to.
+
+- P7b — done. Check passed: XOS reorganised a test directory through its own
+  tools, `xos undo` reversed it, and the directory came back with identical
+  names, sizes, modes, modification times and contents. A second undo correctly
+  found nothing left.
+- P7b GATE — the check caught a real ordering bug. Timestamps have one-second
+  resolution, and four actions inside one second tied, so undo removed the
+  directory before moving the files back out of it. Reverse-chronological has to
+  mean insertion order, not clock order, so ordering is now by row id. There is a
+  test that pins it, because a passing clock cannot be relied on to expose it.
+- A tool executor was added in `tools`, because P7b's check requires XOS to
+  actually reorganise a directory and there was nothing that touched a disk yet.
+  It runs four steps in order: policy judges, a permit is issued, the journal
+  snapshots the prior state, and only then does the action run. That is also
+  where P7's `Permit` guardrail finally has a caller, so no filesystem action can
+  reach a disk without a decision behind it.
+- Snapshot sharpness worth knowing: a hardlink preserves content when the
+  original is unlinked or renamed, which covers deletes and moves, but not when
+  it is overwritten in place, because both names share one inode. Size and mtime
+  are recorded with the link and undo refuses a snapshot whose stats have moved
+  rather than restoring the wrong bytes quietly. Files up to 256KB are copied
+  inline instead, where this cannot arise.
+- Journalling never causes a failure. A snapshot that cannot be taken is logged,
+  tagged unreversible, and the action proceeds. Policy refusal does stop work,
+  which is the difference between the two.
+- An undo that cannot finish does not start: every step is checked before any is
+  applied. A half-reversed directory is worse than one left alone with an
+  explanation.
+- Not yet wired: retention prunes by age on startup. The 2GB ceiling is recorded
+  in config but not yet enforced, since nothing here can produce that volume.

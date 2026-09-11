@@ -5,6 +5,7 @@
 
 mod config;
 mod graph;
+mod journal;
 mod memory;
 mod policy;
 mod providers;
@@ -14,6 +15,7 @@ mod scheduler;
 mod spend;
 mod state;
 mod supervisor;
+mod tools;
 mod vault;
 
 use std::process::ExitCode;
@@ -28,6 +30,7 @@ use providers::anthropic::AnthropicProvider;
 use providers::llama_cpp::LlamaCppProvider;
 use providers::openai::OpenAiCompatibleProvider;
 use providers::ProviderRegistry;
+use journal::Journal;
 use memory::Memory;
 use policy::log::PolicyLog;
 use policy::Policy;
@@ -174,6 +177,24 @@ async fn run() -> Result<(), String> {
     );
     info!(embedder = %memory.embedder().label(), "memory opened");
 
+    let journal = Arc::new(
+        Journal::open(
+            &config::journal_path(),
+            config::journal_store(),
+            config.journal.clone(),
+        )
+        .map_err(|e| format!("journal: {}", e))?,
+    );
+    match journal.prune() {
+        Ok(removed) if removed > 0 => info!(removed, "pruned journal entries past retention"),
+        Ok(_) => {}
+        Err(error) => warn!(%error, "the journal could not be pruned"),
+    }
+    info!(
+        retain_days = journal.config().retain_days,
+        "action journal ready"
+    );
+
     let policy = Arc::new(Policy::new(config.policy.clone()));
     let policy_log = Arc::new(
         PolicyLog::open(&config::policy_log_path()).map_err(|e| format!("policy log: {}", e))?,
@@ -199,6 +220,7 @@ async fn run() -> Result<(), String> {
         Arc::clone(&memory),
         policy,
         policy_log,
+        journal,
     ));
 
     if config.export.enabled {

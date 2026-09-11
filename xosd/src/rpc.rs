@@ -17,6 +17,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, info, warn};
 
+use crate::journal::{Filter as JournalFilter, Journal};
 use crate::memory::{bundle, Memory, Tier};
 use crate::policy::log::PolicyLog;
 use crate::policy::{
@@ -27,6 +28,7 @@ use crate::router::log::{EscalationLog, Record};
 use crate::router::{self, CostMode, Observation, Router, Tier as RouteTier};
 use crate::spend::{cost_of, SpendBook};
 use crate::state::Halt;
+use crate::tools;
 use crate::vault::Vault;
 
 pub const PARSE_ERROR: i32 = -32700;
@@ -70,6 +72,7 @@ pub struct Daemon {
     pub memory: Arc<Memory>,
     pub policy: Arc<Policy>,
     pub policy_log: Arc<PolicyLog>,
+    pub journal: Arc<Journal>,
     pub version: &'static str,
 }
 
@@ -85,6 +88,7 @@ impl Daemon {
         memory: Arc<Memory>,
         policy: Arc<Policy>,
         policy_log: Arc<PolicyLog>,
+        journal: Arc<Journal>,
     ) -> Self {
         Self {
             registry,
@@ -97,6 +101,7 @@ impl Daemon {
             memory,
             policy,
             policy_log,
+            journal,
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -288,6 +293,90 @@ async fn dispatch(
         }
 
         // Judge a call without running it. This is `xos policy test`.
+        // The only path by which XOS touches a disk.
+        "tool.call" => {
+            match serde_json::from_value::<tools::ToolCall>(request.params.clone()) {
+                Ok(call) => {
+                    let context = PolicyContext {
+                        untrusted_source: request
+                            .params
+                            .get("untrusted")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        local_only: daemon.cost_mode() == CostMode::AggressiveLocal,
+                        ..Default::default()
+                    };
+                    let outcome =
+                        tools::run(&call, &daemon.policy, &daemon.journal, &context);
+                    let _ = daemon.policy_log.record(
+                        &call.tool,
+                        &call.arguments.to_string(),
+                        &outcome.decision,
+                        "tool.call",
+                    );
+                    Some(tools::outcome_json(&outcome))
+                }
+                Err(error) => {
+                    let body = failure(request.id.clone(), INVALID_PARAMS, &error.to_string());
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "journal.list" => {
+            let filter = JournalFilter {
+                goal: request
+                    .params
+                    .get("goal")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                tool: request
+                    .params
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                since: request.params.get("since").and_then(Value::as_i64),
+                until: request.params.get("until").and_then(Value::as_i64),
+                limit: request
+                    .params
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(20) as u32,
+            };
+            match daemon.journal.list(&filter) {
+                Ok(entries) => Some(json!({"entries": entries})),
+                Err(error) => {
+                    let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "journal.undo" => {
+            let count = request
+                .params
+                .get("last")
+                .and_then(Value::as_u64)
+                .unwrap_or(1) as usize;
+            match daemon.journal.undo(count) {
+                Ok(report) => {
+                    if let Some(reason) = &report.refused {
+                        warn!(%reason, "an undo was refused");
+                    } else {
+                        info!(undone = report.undone.len(), "undone");
+                    }
+                    Some(serde_json::to_value(report).unwrap_or(Value::Null))
+                }
+                Err(error) => {
+                    let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
         "policy.test" => {
             let tool = request
                 .params

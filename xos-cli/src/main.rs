@@ -51,6 +51,20 @@ enum Command {
     /// Search, inspect and promote what XOS remembers.
     #[command(subcommand)]
     Memory(MemoryCommand),
+    /// Reverse the last actions XOS took.
+    Undo {
+        #[arg(long, default_value_t = 1)]
+        last: u32,
+    },
+    /// Show what XOS has done, and what can still be undone.
+    Journal {
+        #[arg(long)]
+        goal: Option<String>,
+        #[arg(long)]
+        tool: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
     /// Inspect the capability firewall.
     #[command(subcommand)]
     Policy(PolicyCommand),
@@ -154,6 +168,10 @@ fn main() -> std::process::ExitCode {
         Command::Spend { days } => vault::spend(&mut connection, days),
         Command::Escalations { limit } => vault::escalations(&mut connection, limit),
         Command::Export { path } => vault::export(&mut connection, &path),
+        Command::Undo { last } => vault::undo(&mut connection, last),
+        Command::Journal { goal, tool, limit } => {
+            vault::journal(&mut connection, goal.as_deref(), tool.as_deref(), limit)
+        }
         Command::Policy(command) => match command {
             PolicyCommand::Log { limit } => vault::policy_log(&mut connection, limit),
             PolicyCommand::Test { tool, arguments } => {

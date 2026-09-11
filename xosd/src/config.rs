@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::providers::anthropic::AnthropicConfig;
 use crate::providers::llama_cpp::LlamaCppConfig;
 use crate::memory::embed::EmbedderConfig;
+use crate::journal::JournalConfig;
 use crate::policy::PolicyConfig;
 use crate::providers::openai::OpenAiConfig;
 use crate::router::RouterConfig;
@@ -59,6 +60,9 @@ pub struct Config {
     /// The capability firewall.
     #[serde(default)]
     pub policy: PolicyConfig,
+    /// How long undo stays possible.
+    #[serde(default)]
+    pub journal: JournalConfig,
 }
 
 /// A scheduled, encrypted export of everything XOS remembers.
@@ -122,6 +126,7 @@ impl Default for Config {
             embedder: EmbedderConfig::default(),
             export: ExportConfig::default(),
             policy: PolicyConfig::default(),
+            journal: JournalConfig::default(),
         }
     }
 }
@@ -139,6 +144,22 @@ pub fn vault_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("xos")
+}
+
+/// The action journal database.
+pub fn journal_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("journal.db")
+}
+
+/// Where journal snapshots are kept.
+pub fn journal_store() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("journal")
 }
 
 /// The policy decision log.

@@ -458,3 +458,85 @@ pub fn policy_log(connection: &mut Connection, limit: u32) -> Result<String, Str
     }
     Ok(out)
 }
+
+/// `xos journal`
+pub fn journal(
+    connection: &mut Connection,
+    goal: Option<&str>,
+    tool: Option<&str>,
+    limit: u32,
+) -> Result<String, String> {
+    let mut params = json!({"limit": limit});
+    if let Some(goal) = goal {
+        params["goal"] = json!(goal);
+    }
+    if let Some(tool) = tool {
+        params["tool"] = json!(tool);
+    }
+    let result = connection.call("journal.list", params)?;
+    let entries = result
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if entries.is_empty() {
+        let _ = writeln!(out, "The journal is empty. Nothing has been done to undo.");
+        return Ok(out);
+    }
+    let _ = writeln!(
+        out,
+        "{:<8} {:<16} {:<10} {:<12}  {}",
+        "state", "tool", "kind", "goal", "path"
+    );
+    for entry in &entries {
+        let text = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or("-");
+        let state = if entry.get("undone").and_then(Value::as_bool).unwrap_or(false) {
+            "undone"
+        } else if entry.get("reversible").and_then(Value::as_bool).unwrap_or(false) {
+            "undoable"
+        } else {
+            "final"
+        };
+        let _ = writeln!(
+            out,
+            "{:<8} {:<16} {:<10} {:<12}  {}",
+            state,
+            text("tool"),
+            text("kind"),
+            entry.get("goal").and_then(Value::as_str).unwrap_or("-"),
+            text("path")
+        );
+    }
+    Ok(out)
+}
+
+/// `xos undo`
+pub fn undo(connection: &mut Connection, last: u32) -> Result<String, String> {
+    let result = connection.call("journal.undo", json!({"last": last}))?;
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let descriptions = result
+        .get("descriptions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for description in &descriptions {
+        if let Some(text) = description.as_str() {
+            let _ = writeln!(out, "{}", text);
+        }
+    }
+    if let Some(refused) = result.get("refused").and_then(Value::as_str) {
+        if !descriptions.is_empty() {
+            let _ = writeln!(out);
+        }
+        let _ = writeln!(out, "{}", refused);
+        return Ok(out);
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Undone {} actions.", descriptions.len());
+    Ok(out)
+}
