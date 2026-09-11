@@ -13,7 +13,12 @@ pub fn run(
     connection: &mut Connection,
     as_json: bool,
     device: Option<&str>,
+    submit: bool,
 ) -> Result<String, String> {
+    if submit {
+        return self::submit(connection, as_json);
+    }
+
     // Asking about a card that is not here is a question about the database,
     // not about this machine, so the inventory is left out of it entirely.
     if let Some(device) = device {
@@ -29,13 +34,21 @@ pub fn run(
     let resolution = connection.call("hardware.resolve", json!({}))?;
 
     if as_json {
-        // One document, so a script does not have to make two calls and hope
-        // they describe the same machine.
+        // One document, so a script does not have to make several calls and
+        // hope they describe the same machine. The submission report is in here
+        // too, so the install script never has to assemble its own: two
+        // descriptions of what would be sent is one too many.
+        let report = connection
+            .call("hardware.report", json!({}))
+            .ok()
+            .and_then(|answer| answer.get("report").cloned())
+            .unwrap_or(Value::Null);
         let combined = json!({
             "inventory": inventory.get("inventory").cloned().unwrap_or(Value::Null),
             "profile": inventory.get("profile").cloned().unwrap_or(Value::Null),
             "summary": inventory.get("summary").cloned().unwrap_or(Value::Null),
             "resolve": resolution,
+            "report": report,
         });
         return serde_json::to_string_pretty(&combined)
             .map_err(|e| format!("cannot render the report: {}", e));
@@ -143,12 +156,16 @@ pub fn render(inventory: &Value, resolution: &Value) -> String {
 
         if let Some(found) = display_resolutions.get(index) {
             if let Some(architecture) = found.get("architecture").and_then(Value::as_str) {
-                let _ = writeln!(
-                    out,
-                    "            {} · branch {}",
-                    architecture,
-                    found.get("branch").and_then(Value::as_str).unwrap_or("-")
-                );
+                match found.get("branch").and_then(Value::as_str) {
+                    Some(branch) => {
+                        let _ = writeln!(out, "            {} · branch {}", architecture, branch);
+                    }
+                    // Only NVIDIA has branches. A dash here would read as a
+                    // missing fact rather than an absent concept.
+                    None => {
+                        let _ = writeln!(out, "            {}", architecture);
+                    }
+                }
             }
             if text(found, "driver") == "unknown" {
                 // Calling "unknown" a recommendation invites someone to install
@@ -273,6 +290,70 @@ pub fn render(inventory: &Value, resolution: &Value) -> String {
     out
 }
 
+/// Send this machine to the community database.
+///
+/// The whole contents are printed first. Sending anything off someone's machine
+/// without showing them what it is, in full, is not something XOS does — and a
+/// summary is not the same as the thing itself.
+fn submit(connection: &mut Connection, as_json: bool) -> Result<String, String> {
+    let answer = connection.call("hardware.report", json!({}))?;
+    let report = answer.get("report").cloned().unwrap_or(Value::Null);
+    let body = serde_json::to_string_pretty(&report)
+        .map_err(|e| format!("cannot render the report: {}", e))?;
+
+    if as_json {
+        return Ok(body);
+    }
+
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "This is exactly what would be sent to {}, and nothing else:",
+        answer
+            .get("endpoint")
+            .and_then(Value::as_str)
+            .unwrap_or("the community database")
+    );
+    let _ = writeln!(out);
+    for line in body.lines() {
+        let _ = writeln!(out, "  {}", line);
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "It describes the machine. It carries no hostname, no user name, no"
+    );
+    let _ = writeln!(out, "serial number and no network address.");
+    let _ = writeln!(out);
+
+    print!("{}", out);
+    print!("Send it? [y/N] ");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let mut answer = String::new();
+    if std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut answer).is_err() {
+        return Ok("Not sent.".to_string());
+    }
+    if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+        return Ok("Not sent.".to_string());
+    }
+
+    let outcome = connection.call("hardware.submit", json!({ "confirm": true }))?;
+    if outcome.get("sent").and_then(Value::as_bool) == Some(true) {
+        Ok("Sent. Thank you — the next person with this card will have an easier time.".to_string())
+    } else {
+        // Someone who agreed to send something is owed the truth about whether
+        // it went.
+        Ok(format!(
+            "Not sent: {}",
+            outcome
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("the database could not be reached")
+        ))
+    }
+}
+
 /// One named card, with no machine around it.
 fn render_device(name: &str, resolution: &Value) -> String {
     let mut out = String::new();
@@ -304,12 +385,14 @@ fn render_device(name: &str, resolution: &Value) -> String {
             .unwrap_or_default()
     );
     if let Some(architecture) = found.get("architecture").and_then(Value::as_str) {
-        let _ = writeln!(
-            out,
-            "            {} · branch {}",
-            architecture,
-            found.get("branch").and_then(Value::as_str).unwrap_or("-")
-        );
+        match found.get("branch").and_then(Value::as_str) {
+            Some(branch) => {
+                let _ = writeln!(out, "            {} · branch {}", architecture, branch);
+            }
+            None => {
+                let _ = writeln!(out, "            {}", architecture);
+            }
+        }
     }
     let _ = writeln!(
         out,
@@ -480,6 +563,25 @@ mod tests {
             "someone whose screen went black needs the whole chain, in order:\n{}",
             output
         );
+    }
+
+    #[test]
+    fn a_card_with_no_branch_does_not_print_an_empty_one() {
+        // Only NVIDIA has driver branches. A dash where a fact should be reads
+        // as a missing fact rather than an absent concept.
+        let resolution = json!({
+            "display": [{
+                "vendor": "AMD", "vendor_id": "1002", "device_id": "6798",
+                "class": "display", "architecture": "GCN 1.0 (Tahiti)",
+                "driver": "mesa", "firmware": ["linux-firmware"],
+                "kernel_parameters": ["amdgpu.si_support=1"],
+                "fallback": ["amdgpu", "radeon", "vesa"], "confidence": "known"
+            }],
+            "network": []
+        });
+        let output = render_device("1002:6798", &resolution);
+        assert!(output.contains("GCN 1.0 (Tahiti)"), "{}", output);
+        assert!(!output.contains("branch"), "{}", output);
     }
 
     #[test]

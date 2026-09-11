@@ -22,13 +22,31 @@ const FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Database {
-    #[serde(default)]
-    pub format_version: u32,
+    // The format version is not kept: `load_from` refuses anything but
+    // FORMAT_VERSION, so a field here could only ever hold that constant.
     #[serde(default)]
     pub updated: String,
     pub nvidia_branches: NvidiaBranches,
+    pub amd_generations: AmdGenerations,
     #[serde(default)]
     pub entries: Vec<Entry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AmdGenerations {
+    pub ranges: Vec<AmdRange>,
+    pub generation_parameters: std::collections::HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AmdRange {
+    pub from: String,
+    pub to: String,
+    pub generation: String,
+    #[serde(default)]
+    pub codename: String,
+    #[serde(default)]
+    pub confidence: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -93,6 +111,12 @@ pub struct Resolution {
     pub architecture: Option<String>,
     /// The package to install, or "in-tree" when the kernel already has it.
     pub driver: String,
+    /// The userspace that goes with it, where the driver is only half the
+    /// story. A kernel module without its libGL and Xorg driver produces a
+    /// machine that boots to a black screen, so this is not optional and the
+    /// installer treats its failure as the driver's failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utils: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub firmware: Vec<String>,
@@ -120,20 +144,29 @@ impl Database {
     pub fn load_from(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
-        let database: Self = serde_json::from_str(&text)
-            .map_err(|e| format!("{} is not valid: {}", path.display(), e))?;
-        // A table written for a later format may mean something different by
-        // the same field names, and reading it anyway is how a machine gets the
-        // wrong driver. Refusing is the safe answer.
-        if database.format_version != FORMAT_VERSION {
+
+        // The version is read before the rest of the file, not after. A table
+        // written for a later format may mean something different by the same
+        // field names, and it will very likely also fail to parse — at which
+        // point the reason given would be a missing field rather than the real
+        // one. Whoever is looking at a machine with the wrong driver deserves
+        // the actual answer.
+        let loose: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("{} is not valid JSON: {}", path.display(), e))?;
+        let version = loose
+            .get("format_version")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u32;
+        if version != FORMAT_VERSION {
             return Err(format!(
                 "{} is format {}, and this XOS reads format {}",
                 path.display(),
-                database.format_version,
+                version,
                 FORMAT_VERSION
             ));
         }
-        Ok(database)
+
+        serde_json::from_str(&text).map_err(|e| format!("{} is not valid: {}", path.display(), e))
     }
 
     /// The table ships with XOS, but a machine may carry a newer one, so a
@@ -179,6 +212,17 @@ impl Database {
     /// second colon (`pci:8086:wifi`) where one vendor needs more than one row
     /// for the same class. Both forms match here so adding a qualified row
     /// never silently stops the plain one from being found.
+    /// Which AMD generation a device ID belongs to, where it matters.
+    pub fn amd_generation(&self, device_id: &str) -> Option<&AmdRange> {
+        let id = parse_hex(device_id)?;
+        self.amd_generations.ranges.iter().find(|range| {
+            match (parse_hex(&range.from), parse_hex(&range.to)) {
+                (Some(from), Some(to)) => id >= from && id <= to,
+                _ => false,
+            }
+        })
+    }
+
     fn entry(&self, vendor_id: &str, class: &str) -> Option<&Entry> {
         let exact = format!("pci:{}", vendor_id);
         let qualified = format!("pci:{}:", vendor_id);
@@ -224,6 +268,7 @@ impl Database {
                     driver: packages
                         .map(|p| p.driver.clone())
                         .unwrap_or_else(|| "nouveau".to_string()),
+                    utils: packages.map(|p| p.utils.clone()),
                     branch: Some(range.branch.clone()),
                     firmware: vec!["linux-firmware".to_string()],
                     kernel_parameters: packages
@@ -240,6 +285,35 @@ impl Database {
             }
         }
 
+        // GCN 1.0 and 1.1 are driven by radeon unless the kernel is told
+        // otherwise, and a card that falls to radeon silently is the kind of
+        // fault nobody can see: the machine is just slow. The parameters belong
+        // on the recommendation, not on a fallback path nobody reaches.
+        let mut amd_parameters: Vec<String> = Vec::new();
+        let mut amd_architecture: Option<String> = None;
+        let mut amd_confidence: Option<String> = None;
+        if device.vendor_id == "1002" && device.class == "display" {
+            if let Some(range) = self.amd_generation(&device.device_id) {
+                if let Some(parameters) = self
+                    .amd_generations
+                    .generation_parameters
+                    .get(&range.generation)
+                {
+                    amd_parameters = parameters.clone();
+                }
+                // Named, because otherwise the kernel parameters beside it look
+                // arbitrary and the next person deletes them.
+                amd_architecture = Some(if range.codename.is_empty() {
+                    range.generation.clone()
+                } else {
+                    format!("{} ({})", range.generation, range.codename)
+                });
+                if !range.confidence.is_empty() {
+                    amd_confidence = Some(range.confidence.clone());
+                }
+            }
+        }
+
         match entry {
             Some(entry) => Resolution {
                 device: device.description.clone(),
@@ -247,16 +321,21 @@ impl Database {
                 vendor_id: device.vendor_id.clone(),
                 device_id: device.device_id.clone(),
                 class: device.class.clone(),
-                architecture: None,
+                architecture: amd_architecture,
                 driver: entry
                     .driver
                     .clone()
                     .unwrap_or_else(|| "in-tree".to_string()),
+                utils: None,
                 branch: None,
                 firmware: entry.firmware.clone(),
-                kernel_parameters: entry.kernel_parameters.clone(),
+                kernel_parameters: if amd_parameters.is_empty() {
+                    entry.kernel_parameters.clone()
+                } else {
+                    amd_parameters
+                },
                 fallback: entry.fallback.clone(),
-                confidence: entry.confidence.clone(),
+                confidence: amd_confidence.unwrap_or_else(|| entry.confidence.clone()),
                 why: entry.why.clone(),
                 kernel_driver_in_use: device.kernel_driver.clone(),
             },
@@ -275,6 +354,7 @@ impl Database {
                 class: device.class.clone(),
                 architecture: None,
                 driver: "unknown".to_string(),
+                utils: None,
                 branch: None,
                 firmware: Vec::new(),
                 kernel_parameters: Vec::new(),
@@ -329,6 +409,24 @@ mod tests {
         assert_eq!(resolution.architecture.as_deref(), Some("Pascal"));
         assert_eq!(resolution.branch.as_deref(), Some("580"));
         assert_eq!(resolution.driver, "nvidia-580xx-dkms");
+    }
+
+    #[test]
+    fn a_kernel_module_never_arrives_without_its_userspace() {
+        // A driver with no libGL and no Xorg driver is a black screen, which is
+        // the exact outcome the install step exists to prevent.
+        for id in ["1b80", "1183", "0dc4", "2684"] {
+            let resolution = database().resolve(&gpu(id));
+            assert!(
+                resolution.utils.is_some(),
+                "{} installs a kernel module with no userspace",
+                id
+            );
+        }
+        assert_eq!(
+            database().resolve(&gpu("1b80")).utils.as_deref(),
+            Some("nvidia-580xx-utils")
+        );
     }
 
     #[test]
@@ -445,6 +543,84 @@ mod tests {
     }
 
     #[test]
+    fn an_old_gcn_card_is_told_to_use_amdgpu() {
+        // Tahiti, GCN 1.0. Without the parameter it falls to radeon silently and
+        // the machine is slow for a reason nobody can see.
+        let mut device = gpu("6798");
+        device.vendor_id = "1002".to_string();
+        let resolution = database().resolve(&device);
+        assert!(
+            resolution
+                .kernel_parameters
+                .contains(&"amdgpu.si_support=1".to_string()),
+            "{:?}",
+            resolution.kernel_parameters
+        );
+    }
+
+    #[test]
+    fn an_old_amd_card_says_which_generation_it_is() {
+        // Without this the kernel parameters beside it look arbitrary, and the
+        // next person to read the install log deletes them.
+        let mut device = gpu("6798");
+        device.vendor_id = "1002".to_string();
+        assert_eq!(
+            database().resolve(&device).architecture.as_deref(),
+            Some("GCN 1.0 (Tahiti)")
+        );
+    }
+
+    #[test]
+    fn a_gcn_1_1_card_gets_the_cik_parameters_not_the_si_ones() {
+        let mut device = gpu("67b0");
+        device.vendor_id = "1002".to_string();
+        let resolution = database().resolve(&device);
+        assert!(resolution
+            .kernel_parameters
+            .contains(&"amdgpu.cik_support=1".to_string()));
+        assert!(!resolution
+            .kernel_parameters
+            .contains(&"amdgpu.si_support=1".to_string()));
+    }
+
+    #[test]
+    fn a_modern_amd_card_gets_no_legacy_parameters() {
+        // The parameters are inert on newer hardware, but putting them on every
+        // AMD machine makes the kernel command line noise nobody can read.
+        let mut device = gpu("73bf");
+        device.vendor_id = "1002".to_string();
+        assert!(database().resolve(&device).kernel_parameters.is_empty());
+    }
+
+    #[test]
+    fn the_amd_ranges_do_not_overlap_each_other() {
+        // Unlike the NVIDIA table, order here carries no meaning, so an overlap
+        // would be a silent coin toss between two generations.
+        let database = database();
+        let mut ranges: Vec<(u32, u32, &str)> = database
+            .amd_generations
+            .ranges
+            .iter()
+            .map(|r| {
+                (
+                    parse_hex(&r.from).expect("from"),
+                    parse_hex(&r.to).expect("to"),
+                    r.codename.as_str(),
+                )
+            })
+            .collect();
+        ranges.sort();
+        for pair in ranges.windows(2) {
+            assert!(
+                pair[0].1 < pair[1].0,
+                "{} and {} overlap",
+                pair[0].2,
+                pair[1].2
+            );
+        }
+    }
+
+    #[test]
     fn a_realtek_nic_resolves_to_the_in_tree_driver() {
         let device = Device {
             bus: "pci".to_string(),
@@ -520,14 +696,19 @@ mod tests {
         .expect("write");
         let outcome = Database::load_from(&directory);
         assert!(outcome.is_err(), "a future format must not be read");
-        assert!(outcome.unwrap_err().contains("format 99"));
+        // Specifically this reason, not a missing-field error: a later format
+        // will usually fail to parse too, and the parse error would bury the
+        // one fact that explains it.
+        assert!(
+            outcome.unwrap_err().contains("format 99"),
+            "the reason given must be the version, not whatever failed to parse"
+        );
         let _ = std::fs::remove_file(&directory);
     }
 
     #[test]
     fn the_shipped_table_is_the_format_the_loader_expects() {
         let database = database();
-        assert_eq!(database.format_version, 1);
         assert!(!database.updated.is_empty());
         assert!(!database.entries.is_empty());
     }

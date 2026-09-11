@@ -100,6 +100,11 @@ enum Command {
         /// in hex, for example 10de:1b80.
         #[arg(long)]
         device: Option<String>,
+        /// Send this machine to the community hardware database, so the next
+        /// person with this card gets the right driver first time. Shows
+        /// exactly what would be sent and asks before sending anything.
+        #[arg(long)]
+        submit: bool,
     },
     /// Report what each provider has cost, by day.
     Spend {
@@ -229,9 +234,11 @@ fn main() -> std::process::ExitCode {
         Command::Resume => resume(&mut connection),
         Command::Status => status(&mut connection),
         Command::Spend { days } => vault::spend(&mut connection, days),
-        Command::Hardware { json, device } => {
-            hardware::run(&mut connection, json, device.as_deref())
-        }
+        Command::Hardware {
+            json,
+            device,
+            submit,
+        } => hardware::run(&mut connection, json, device.as_deref(), submit),
         Command::Escalations { limit } => vault::escalations(&mut connection, limit),
         Command::Export { path } => vault::export(&mut connection, &path),
         Command::Undo { last } => vault::undo(&mut connection, last),

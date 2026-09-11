@@ -451,6 +451,55 @@ async fn dispatch(
             }
         }
 
+        // What would be sent to the community database, and nothing else.
+        "hardware.report" => {
+            let inventory = crate::hardware::Inventory::read();
+            let database = crate::hardware::Database::load().ok();
+            Some(json!({
+                "report": inventory.report(database.as_ref()),
+                "endpoint": crate::hardware::SUBMIT_URL,
+            }))
+        }
+
+        // Sending it. Opt-in, never automatic, and judged by the policy engine
+        // like any other egress, because that is exactly what it is.
+        "hardware.submit" => {
+            if request.params.get("confirm").and_then(Value::as_bool) != Some(true) {
+                let body = failure(
+                    request.id.clone(),
+                    INVALID_PARAMS,
+                    "a submission is only ever made with an explicit confirmation",
+                );
+                let _ = write_line(writer, &body).await;
+                None
+            } else {
+                let inventory = crate::hardware::Inventory::read();
+                let database = crate::hardware::Database::load().ok();
+                let report = inventory.report(database.as_ref());
+                let payload = serde_json::to_value(&report).unwrap_or(Value::Null);
+
+                let context = crate::policy::Context {
+                    api_bound: true,
+                    untrusted_source: false,
+                    local_only: false,
+                };
+                let decision = daemon.policy.evaluate("hardware.submit", &payload, &context);
+                let _ = daemon.policy_log.record(
+                    "hardware.submit",
+                    &payload.to_string(),
+                    &decision,
+                    "hardware.submit",
+                );
+
+                match decision {
+                    crate::policy::PolicyDecision::Block { reason } => {
+                        Some(json!({"ok": false, "sent": false, "reason": reason}))
+                    }
+                    _ => Some(submit_report(&payload).await),
+                }
+            }
+        }
+
         "hardware.profile" => {
             let inventory = crate::hardware::Inventory::read();
             let profile = inventory.profile();
@@ -1936,6 +1985,38 @@ pub async fn run_eligible(
     }
 
     ran
+}
+
+/// POST the report. Failure is reported, never hidden: someone who agreed to
+/// send something is owed the truth about whether it went.
+async fn submit_report(payload: &Value) -> Value {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return json!({"ok": false, "sent": false, "reason": error.to_string()}),
+    };
+    match client
+        .post(crate::hardware::SUBMIT_URL)
+        .json(payload)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            json!({"ok": true, "sent": true, "endpoint": crate::hardware::SUBMIT_URL})
+        }
+        Ok(response) => json!({
+            "ok": false,
+            "sent": false,
+            "reason": format!("the database answered {}", response.status()),
+        }),
+        Err(error) => json!({
+            "ok": false,
+            "sent": false,
+            "reason": format!("could not reach the database: {}", error),
+        }),
+    }
 }
 
 /// Do what a tick decided. Pulse chooses; this carries it out, so every action

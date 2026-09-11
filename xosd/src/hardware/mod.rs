@@ -14,6 +14,10 @@
 
 pub mod db;
 
+/// Where a submission goes. One place, so the CLI, the daemon and the install
+/// script cannot disagree about it.
+pub const SUBMIT_URL: &str = "https://hardware.xos.community/submit";
+
 use serde::Serialize;
 
 pub use db::Database;
@@ -125,6 +129,79 @@ pub struct Display {
     pub connected: bool,
     /// Which card drives it, by its /sys card name.
     pub driven_by: String,
+}
+
+/// The anonymised report for the community database.
+///
+/// Built here, in the daemon, so that the CLI and the install script cannot
+/// drift into sending different things. What is left out is the point: no
+/// hostname, no user names, no MAC addresses, no serial numbers, no disk
+/// contents. Hardware identifiers describe the machine; nothing here describes
+/// the person sitting at it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Report {
+    pub format: &'static str,
+    pub format_version: u32,
+    pub cpu_model: String,
+    pub cpu_level: u8,
+    pub memory_mb: u64,
+    pub firmware: String,
+    pub profile: &'static str,
+    pub display: Vec<ReportDevice>,
+    pub network: Vec<ReportDevice>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportDevice {
+    pub vendor_id: String,
+    pub device_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subsystem_id: Option<String>,
+    pub class: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kernel_driver: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_driver: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+}
+
+impl Inventory {
+    /// What would be sent, and nothing else.
+    pub fn report(&self, database: Option<&Database>) -> Report {
+        let describe = |devices: &[Device]| -> Vec<ReportDevice> {
+            devices
+                .iter()
+                .map(|device| {
+                    let resolution = database.map(|db| db.resolve(device));
+                    ReportDevice {
+                        vendor_id: device.vendor_id.clone(),
+                        device_id: device.device_id.clone(),
+                        subsystem_id: device.subsystem_id.clone(),
+                        class: device.class.clone(),
+                        kernel_driver: device.kernel_driver.clone(),
+                        resolved_driver: resolution.as_ref().map(|r| r.driver.clone()),
+                        branch: resolution.as_ref().and_then(|r| r.branch.clone()),
+                        confidence: resolution.as_ref().map(|r| r.confidence.clone()),
+                    }
+                })
+                .collect()
+        };
+
+        Report {
+            format: "xos-hardware-report",
+            format_version: 1,
+            cpu_model: self.cpu.model.clone(),
+            cpu_level: self.cpu.microarchitecture_level,
+            memory_mb: self.memory.total_mb,
+            firmware: self.firmware.mode.clone(),
+            profile: self.profile().label(),
+            display: describe(&self.gpus),
+            network: describe(&self.network),
+        }
+    }
 }
 
 /// Which tier of model this machine can realistically carry.
@@ -340,11 +417,16 @@ fn read_pci() -> Vec<Device> {
             continue;
         }
 
+        // A subsystem of 0000:0000 is the kernel saying there is no subsystem,
+        // not a subsystem that happens to be zero. Reporting it as a value puts
+        // a meaningless row in the community database.
         let subsystem_id = match (
             sysfs_id(&path, "subsystem_vendor"),
             sysfs_id(&path, "subsystem_device"),
         ) {
-            (Some(vendor), Some(device)) => Some(format!("{}:{}", vendor, device)),
+            (Some(vendor), Some(device)) if vendor != "0000" || device != "0000" => {
+                Some(format!("{}:{}", vendor, device))
+            }
             _ => None,
         };
 
@@ -598,6 +680,28 @@ mod tests {
     }
 
     #[test]
+    fn the_report_describes_the_machine_and_never_the_person() {
+        // The value of this report is entirely in the device identifiers. Every
+        // field that could name the person at the keyboard is absent by
+        // construction, and this test is what keeps it that way as fields are
+        // added later.
+        let report = capable().report(None);
+        let text = serde_json::to_string(&report).expect("serialise");
+        for forbidden in [
+            "hostname", "serial", "uuid", "mac", "user", "home", "ssid", "address",
+        ] {
+            assert!(
+                !text.to_lowercase().contains(forbidden),
+                "`{}` appears in a report that is meant to describe only hardware: {}",
+                forbidden,
+                text
+            );
+        }
+        assert_eq!(report.display.len(), 1, "the device itself is still there");
+        assert_eq!(report.display[0].device_id, "1b80");
+    }
+
+    #[test]
     fn a_named_device_is_parsed_in_either_spelling() {
         for text in ["10de:1b80", "0x10DE:0x1B80", " 10de : 1b80 "] {
             let device = Device::named(text, "display").expect(text);
@@ -611,6 +715,18 @@ mod tests {
     fn a_malformed_device_name_is_refused_rather_than_half_read() {
         for text in ["10de", "10de:", "zzzz:1b80", "10de:1b8", ""] {
             assert!(Device::named(text, "display").is_none(), "{} was accepted", text);
+        }
+    }
+
+    #[test]
+    fn an_absent_subsystem_is_absent_rather_than_zero() {
+        for device in read_pci() {
+            assert_ne!(
+                device.subsystem_id.as_deref(),
+                Some("0000:0000"),
+                "0000:0000 means there is no subsystem, and the community \
+                 database would collect a meaningless row for it"
+            );
         }
     }
 

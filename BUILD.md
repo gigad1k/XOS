@@ -17,7 +17,7 @@
 | 13 | P11 | Status bar and desktop theme | done | |
 | 14 | P12 | Mission Control | done | |
 | 15 | HW-1 | Hardware detection | done | |
-| 16 | HW-2 | Driver resolution and installation | in-progress | *GATE* |
+| 16 | HW-2 | Driver resolution and installation | done | *GATE* |
 | 17 | P13 | Installer | todo | *GATE* |
 | 18 | P14 | First-run experience and first goal | todo | |
 
@@ -479,3 +479,95 @@ real disks.
   check found. Secure Boot reading, EDID-backed display enumeration and SMART are
   unexercised.
 - 290 tests pass across the workspace; the build carries no warnings.
+
+### HW-2 - Driver resolution and installation
+
+- `install/00-hardware.sh` runs before every other install step. There is no
+  `set -e` in it, deliberately and with a comment saying so, and the harness
+  asserts its absence: one failing command must never abort an install.
+- Every path ends somewhere that shows a picture. The graphics chain runs
+  matched driver, then the database's fallback list, then `modesetting`, then
+  `vesa` - and the last two are not packages at all, which is why the chain
+  cannot run out. A test drives it with a package manager that refuses
+  everything and asserts the result is still a working display mode.
+- The guardrail is kept exactly: a device that is not in hardware-db.json gets
+  no driver. The log says "not in hardware-db.json, so no driver is guessed at"
+  and the chain takes over.
+- Running the real log, rather than trusting the harness, found four defects
+  the tests had not been written to catch:
+  1. **The kernel module was installed and its userspace was not.** The database
+     has carried a `utils` package per branch since HW-1 and nothing read it. A
+     machine would have booted with a healthy `nvidia` module, no libGL and no
+     Xorg driver - which is a black screen, the single outcome this file exists
+     to prevent. The resolution now carries `utils`, the installer installs and
+     pins it with the driver, and a failure to install it fails the whole level
+     so the chain moves on.
+  2. **The report claimed the bluetooth service was enabled two lines under
+     "could not enable bluetooth.service".** The report is what someone reads
+     when the machine misbehaves months later, so it now says what happened
+     rather than what was attempted.
+  3. **The AMD kernel parameters were unreachable.** They sat on a fallback path
+     that only ran when the database driver failed, and it does not fail. A GCN
+     1.0 card would have fallen to radeon silently and the machine would just
+     have been slow. `amd_generations` in hardware-db.json now maps device IDs
+     to GCN 1.0 and 1.1, the parameters ride on the recommendation, and the card
+     reports its generation so the parameters beside it are not mysterious.
+  4. **Dead code** left in the graphics loop, removed.
+- A fifth defect came from the harness itself: a later edit dropped a closing
+  `fi` and the script stopped parsing. The failures it produced looked like six
+  unrelated problems. `bash -n` is now the first thing the harness checks,
+  because an installer that does not parse is the worst failure available and it
+  should be reported as one thing rather than six.
+- The submission report is built in the daemon, once. The install script asks
+  `xos hardware --json` for it rather than assembling its own, because two
+  descriptions of what would be sent is one too many: the day someone adds a
+  field to one, the other keeps quietly promising the old contents.
+- What the report leaves out is the point, and a test enforces it: no hostname,
+  no user name, no MAC address, no serial number, no SSID. A subsystem ID of
+  0000:0000 is dropped too - that is the kernel saying there is no subsystem,
+  and a database keyed on it would collect a meaningless row.
+- `xos hardware --submit` exists because the install log tells people to run it.
+  A command promised in an install log and then missing is its own small breach
+  of trust. It prints the whole report, asks, and only then sends - and the
+  send goes through the daemon, where the policy engine judges the egress and
+  the policy log records it, like any other.
+- The check passes. On the unsupported-wifi machine the install completes with
+  exit 0, graphics settle on the first choice, and the log carries a boxed,
+  unmissable "WIFI IS NOT AVAILABLE ON THIS MACHINE" with a specific suggested
+  fix and the sentence "The install is continuing. The desktop will boot."
+- 341 tests pass across the workspace and 36 in the installer harness; the build
+  carries no warnings.
+
+#### Gate review - HW-2
+
+What a human should verify, and why, before the installer in P13 is trusted with
+a real disk:
+
+1. **The NVIDIA branch table against real cards.** `hardware-db.json` maps device
+   ID ranges to architectures and branches. Only the GTX 1080 row is marked
+   `confirmed`; everything else is `known`, meaning taken from documentation and
+   not observed here. A wrong row is a black screen on someone's machine. The
+   Volta range deliberately precedes the Pascal range because it sits inside it -
+   that ordering is load bearing and a test pins it.
+2. **The AMD GCN 1.0 and 1.1 ranges**, added in this task and entirely
+   unobserved. These decide whether an old Radeon is driven by amdgpu or falls
+   to radeon.
+3. **That a real install actually boots.** Nothing here can prove it. The script
+   was exercised against a fake root and a fake package manager; no package was
+   installed, no module loaded, no disk touched. "The desktop boots" was verified
+   only by proxy: a graphics level is always settled and the chain terminates at
+   a mode that works on any VGA hardware.
+4. **The submission endpoint.** `https://hardware.xos.community/submit` does not
+   exist yet. Nothing sends to it without an explicit yes, and the failure path
+   is handled and reported, but the address is a placeholder that someone has to
+   make real or change.
+5. **The bundled DKMS sources.** The script looks in
+   `/run/archiso/bootmnt/xos/dkms`. P13 has to actually put rtl8821ce, rtl8723bu,
+   broadcom-wl and relatives there, because the AUR needs the internet that those
+   drivers exist to provide.
+
+Deliberate scope decision, recorded per driver.txt: this task wrote the
+installation code and did not run it. No driver was installed, no package
+manager invoked, no kernel module loaded and no disk written on the machine this
+was built on. Everything was exercised against a temporary root with a stub
+package manager.
