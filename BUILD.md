@@ -9,7 +9,7 @@
 | 5 | P4 | XOS Vault and cloud providers | done | |
 | 6 | P5 | Router and escalation log | done | *GATE* |
 | 7 | P6 | XOS Memory, export and import | done | |
-| 8 | P7 | Policy engine and egress protection | todo | *GATE* |
+| 8 | P7 | Policy engine and egress protection | in-progress | *GATE* |
 | 9 | P7b | Action journal and undo | todo | *GATE* |
 | 10 | P8 | Supervisor | todo | |
 | 11 | P9 | XOS Goals, the task graph | todo | |
