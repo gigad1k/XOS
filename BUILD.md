@@ -12,7 +12,7 @@
 | 8 | P7 | Policy engine and egress protection | done | *GATE* |
 | 9 | P7b | Action journal and undo | done | *GATE* |
 | 10 | P8 | Supervisor | done | |
-| 11 | P9 | XOS Goals, the task graph | todo | |
+| 11 | P9 | XOS Goals, the task graph | in-progress | |
 | 12 | P10 | XOS Pulse and power management | todo | |
 | 13 | P11 | Status bar and desktop theme | todo | |
 | 14 | P12 | Mission Control | todo | |
