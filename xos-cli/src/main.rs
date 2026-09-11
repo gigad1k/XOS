@@ -5,6 +5,7 @@
 
 mod bar;
 mod chat;
+mod hardware;
 mod socket;
 mod theme;
 mod vault;
@@ -88,6 +89,18 @@ enum Command {
     Export { path: String },
     /// Merge a bundle back in. Nothing already here is overwritten.
     Import { path: String },
+    /// What is in this machine, and which drivers it needs.
+    ///
+    /// Detection only. This never installs or loads anything.
+    Hardware {
+        /// Print the whole report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Ask about a card that is not in this machine, as vendor:device
+        /// in hex, for example 10de:1b80.
+        #[arg(long)]
+        device: Option<String>,
+    },
     /// Report what each provider has cost, by day.
     Spend {
         /// How many days back to report.
@@ -216,6 +229,9 @@ fn main() -> std::process::ExitCode {
         Command::Resume => resume(&mut connection),
         Command::Status => status(&mut connection),
         Command::Spend { days } => vault::spend(&mut connection, days),
+        Command::Hardware { json, device } => {
+            hardware::run(&mut connection, json, device.as_deref())
+        }
         Command::Escalations { limit } => vault::escalations(&mut connection, limit),
         Command::Export { path } => vault::export(&mut connection, &path),
         Command::Undo { last } => vault::undo(&mut connection, last),

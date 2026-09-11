@@ -1,0 +1,91 @@
+{
+  "format": "xos-community-db",
+  "format_version": 1,
+  "kind": "hardware",
+  "updated": "2026-09-11",
+  "note": "Shares its shape with verified-models.json so both go through the same submission path: a top-level format block, then entries, each with an id, what it needs, and how confident we are. Add a row by opening a pull request; say what machine you tested it on.",
+
+  "nvidia_branches": {
+    "note": "NVIDIA device IDs group by architecture, and the architecture decides which driver branch still supports the card. Getting this wrong is the difference between a working desktop and a black screen, so the ranges are explicit rather than inferred. Overlaps are resolved by listing the narrower range first.",
+    "ranges": [
+      { "from": "0x0190", "to": "0x05FF", "architecture": "Tesla",    "branch": "nouveau", "confidence": "known", "why": "no supported proprietary branch remains" },
+      { "from": "0x06C0", "to": "0x0E21", "architecture": "Fermi",    "branch": "390",     "confidence": "known" },
+      { "from": "0x0FC0", "to": "0x137F", "architecture": "Kepler",   "branch": "470",     "confidence": "known" },
+      { "from": "0x1380", "to": "0x1AFF", "architecture": "Maxwell",  "branch": "580",     "confidence": "known" },
+      { "from": "0x1D80", "to": "0x1DBF", "architecture": "Volta",    "branch": "580",     "confidence": "known", "why": "listed before Pascal because it sits inside Pascal's range" },
+      { "from": "0x1B00", "to": "0x1DFF", "architecture": "Pascal",   "branch": "580",     "confidence": "confirmed", "why": "GTX 1080 at 0x1B80 is the reference machine" },
+      { "from": "0x1E00", "to": "0x21FF", "architecture": "Turing",   "branch": "current", "confidence": "known" },
+      { "from": "0x2200", "to": "0x25FF", "architecture": "Ampere",   "branch": "current", "confidence": "known" },
+      { "from": "0x2600", "to": "0x28FF", "architecture": "Ada",      "branch": "current", "confidence": "known" },
+      { "from": "0x2900", "to": "0x2FFF", "architecture": "Blackwell","branch": "current", "confidence": "known" }
+    ],
+    "branch_packages": {
+      "current":  { "driver": "nvidia-open-dkms",   "utils": "nvidia-utils",         "kernel_parameters": ["nvidia_drm.modeset=1"] },
+      "580":      { "driver": "nvidia-580xx-dkms",  "utils": "nvidia-580xx-utils",   "kernel_parameters": ["nvidia_drm.modeset=1"], "why": "Maxwell, Pascal and Volta are frozen on this branch" },
+      "470":      { "driver": "nvidia-470xx-dkms",  "utils": "nvidia-470xx-utils",   "kernel_parameters": ["nvidia_drm.modeset=1"] },
+      "390":      { "driver": "nvidia-390xx-dkms",  "utils": "nvidia-390xx-utils",   "kernel_parameters": [] },
+      "nouveau":  { "driver": "mesa",               "utils": "mesa",                 "kernel_parameters": [] }
+    }
+  },
+
+  "entries": [
+    {
+      "id": "pci:10de",
+      "class": "display",
+      "vendor": "NVIDIA",
+      "resolve": "nvidia_branches",
+      "fallback": ["nouveau", "vesa"],
+      "confidence": "confirmed"
+    },
+    {
+      "id": "pci:1002",
+      "class": "display",
+      "vendor": "AMD",
+      "driver": "mesa",
+      "firmware": ["linux-firmware"],
+      "kernel_parameters": [],
+      "fallback": ["amdgpu", "radeon", "vesa"],
+      "confidence": "known",
+      "why": "amdgpu is in-tree; older GCN parts may need radeon instead"
+    },
+    {
+      "id": "pci:8086",
+      "class": "display",
+      "vendor": "Intel",
+      "driver": "mesa",
+      "firmware": ["linux-firmware"],
+      "kernel_parameters": [],
+      "fallback": ["i915", "vesa"],
+      "confidence": "known"
+    },
+    {
+      "id": "pci:10ec",
+      "class": "network",
+      "vendor": "Realtek",
+      "driver": "in-tree",
+      "firmware": ["linux-firmware"],
+      "fallback": ["r8169", "r8168-dkms"],
+      "confidence": "known",
+      "why": "r8169 covers most parts; a few need the out-of-tree r8168"
+    },
+    {
+      "id": "pci:14e4",
+      "class": "network",
+      "vendor": "Broadcom",
+      "driver": "broadcom-wl-dkms",
+      "firmware": ["linux-firmware"],
+      "fallback": ["b43", "brcmfmac"],
+      "confidence": "known",
+      "why": "the usual cause of no wifi after an install on older laptops"
+    },
+    {
+      "id": "pci:8086:wifi",
+      "class": "network",
+      "vendor": "Intel",
+      "driver": "in-tree",
+      "firmware": ["linux-firmware"],
+      "fallback": ["iwlwifi"],
+      "confidence": "known"
+    }
+  ]
+}

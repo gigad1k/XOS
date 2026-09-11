@@ -5,6 +5,7 @@
 
 mod config;
 mod graph;
+mod hardware;
 mod journal;
 mod memory;
 mod mission;

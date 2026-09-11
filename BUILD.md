@@ -16,7 +16,7 @@
 | 12 | P10 | XOS Pulse and power management | done | |
 | 13 | P11 | Status bar and desktop theme | done | |
 | 14 | P12 | Mission Control | done | |
-| 15 | HW-1 | Hardware detection | in-progress | |
+| 15 | HW-1 | Hardware detection | done | |
 | 16 | HW-2 | Driver resolution and installation | todo | *GATE* |
 | 17 | P13 | Installer | todo | *GATE* |
 | 18 | P14 | First-run experience and first goal | todo | |
@@ -409,3 +409,73 @@ real disks.
 - Verification limit: no browser here, so the page was exercised through its
   endpoints rather than rendered. Layout and motion are unverified; the data and
   every action are not.
+
+### HW-1 — Hardware detection
+
+- Read-only in the strongest sense the guardrail asks for. Everything comes from
+  `/proc`, `/sys`, or a tool that itself only reads. Nothing is installed,
+  loaded, modprobed or written. The check confirmed it: the set of loaded kernel
+  modules was byte-identical before and after, and the daemon log contains no
+  install-shaped line. The router and provider registry were not touched.
+- `hardware-db.json` is the community table, sharing its shape with
+  `verified-models.json` so both go through the same submission path. NVIDIA
+  device-ID ranges map to architecture and driver branch; every row carries a
+  confidence and, where the reasoning is not obvious, a `why`.
+- Range order in the file is load bearing and says so: the Volta IDs sit inside
+  the Pascal range, so Volta is listed first and wins. A test asserts it, because
+  sorting the ranges at load time would silently break it.
+- The check passes. `10de:1b80` resolves to Pascal, branch 580,
+  `nvidia-580xx-dkms`, confidence confirmed, with `nvidia_drm.modeset=1` and a
+  fallback chain. Kepler, Fermi, Tesla, Volta, Ada, an AMD card and an unknown
+  card were all resolved as well.
+- The check found five real defects, all now fixed:
+  1. **Firmware said BIOS when it could not tell.** The absence of
+     `/sys/firmware/efi` was being read as "legacy boot", but in a container, a
+     VM or WSL there is no firmware to see at all. The installer partitions on
+     this answer, so answering BIOS there would have laid an MBR on a machine
+     that boots UEFI. There is now a third state, `unknown`, decided by whether
+     DMI is visible, and it is a different fact that the installer must treat
+     differently.
+  2. **Detection depended on `lspci`.** pciutils is not installed on this
+     machine, and an install image — exactly the machine that most needs its
+     graphics card identified — very often has none either. PCI now comes from
+     `/sys/bus/pci/devices`, which is the kernel and is always there. `lspci` is
+     still used when present, but only to put readable names on devices the
+     kernel has already reported.
+  3. **The fallback chain offered branches that cannot drive the card.** It was
+     built by walking every other branch, which reads as helpful and is the
+     opposite: exactly one proprietary branch drives any given card, and the
+     others do not partly work on it, they do not work at all. Offering 470 to a
+     Pascal owner whose 580 install just failed costs them another reboot and
+     gives them a wrong theory about why. The chain is now the open driver, then
+     a plain framebuffer.
+  4. **VRAM was read for "a" GPU rather than for this one.** Both the nvidia-smi
+     and the sysfs path took the first answer they found, so a second card would
+     have been reported with the first one's memory — on the machine most likely
+     to care. Both now match on the PCI address.
+  5. **An unknown device passed off its loaded module as a driver.** The card
+     here reported `dxgkrnl`, which is a fact about this machine and not
+     something anyone can install; HW-2 reads that field as a package name and
+     would have failed on it. An unknown device now says it is unknown, and what
+     is driving it is reported separately as the fact it is.
+- `xos hardware --device 10de:1b80` answers for a card that is not in the
+  machine. That exists because someone planning an install, or helping a stranger
+  through a chat window, needs the answer before owning the hardware — and it is
+  how this check was run without a GTX 1080. The output says plainly that the
+  card is not present and that nothing was changed to answer.
+- `profile()` is deliberately conservative: a GPU needs 4 GB of VRAM before XOS
+  claims it can run a model locally, and below 8 GB of system memory it says
+  api-only rather than promising slow CPU inference. Promising local inference a
+  machine cannot deliver makes a bad first hour.
+- The CPU check confirms baseline x86-64 rather than v2 or v3, as the prompt
+  requires, and reports the level it actually found. A machine below baseline is
+  told so before an install, not after.
+- Verification limits, plainly. There is no GTX 1080 here, so the reference
+  mapping was verified through the database and the resolve path rather than
+  against the card; the code that reads a real NVIDIA card's VRAM ran only on the
+  no-match path. This is WSL, which has no firmware, no PCI display device and no
+  DRM outputs, so `uefi` and `bios` were not observed on real firmware — only
+  `unknown` was, which is the correct answer here and was itself the defect the
+  check found. Secure Boot reading, EDID-backed display enumeration and SMART are
+  unexercised.
+- 290 tests pass across the workspace; the build carries no warnings.

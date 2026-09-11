@@ -368,6 +368,101 @@ async fn dispatch(
             }
         }
 
+        // Hardware. Read-only in the strongest sense: this never installs,
+        // loads or modifies anything. HW-2 owns installation, and keeping the
+        // line here means detection can be run on a machine that is already
+        // unhappy without making it worse.
+        "hardware.inventory" => {
+            let inventory = crate::hardware::Inventory::read();
+            Some(json!({
+                "inventory": inventory,
+                "summary": inventory.summary(),
+                "profile": inventory.profile().label(),
+            }))
+        }
+
+        "hardware.resolve" => {
+            match crate::hardware::Database::load() {
+                Ok(database) => {
+                    let resolve = |devices: &[crate::hardware::Device]| {
+                        devices
+                            .iter()
+                            .map(|device| database.resolve(device))
+                            .collect::<Vec<_>>()
+                    };
+
+                    // A device may be named rather than found. Someone planning
+                    // an install, or helping a stranger over a chat window,
+                    // needs to ask what XOS would do with a card that is not in
+                    // this machine.
+                    if let Some(named) = request
+                        .params
+                        .get("device")
+                        .and_then(Value::as_str)
+                    {
+                        let class = request
+                            .params
+                            .get("class")
+                            .and_then(Value::as_str)
+                            .unwrap_or("display");
+                        return match crate::hardware::Device::named(named, class) {
+                            Some(device) => Some(json!({
+                                "display": if class == "display" {
+                                    vec![database.resolve(&device)]
+                                } else {
+                                    Vec::new()
+                                },
+                                "network": if class == "network" {
+                                    vec![database.resolve(&device)]
+                                } else {
+                                    Vec::new()
+                                },
+                                "hypothetical": true,
+                                "database_updated": database.updated,
+                            })),
+                            None => {
+                                let body = failure(
+                                    request.id.clone(),
+                                    INVALID_PARAMS,
+                                    "a device is written vendor:device in hex, as in 10de:1b80",
+                                );
+                                let _ = write_line(writer, &body).await;
+                                None
+                            }
+                        };
+                    }
+
+                    let inventory = crate::hardware::Inventory::read();
+                    Some(json!({
+                        "display": resolve(&inventory.gpus),
+                        "network": resolve(&inventory.network),
+                        "profile": inventory.profile().label(),
+                        "database_updated": database.updated,
+                    }))
+                }
+                Err(error) => {
+                    // Without the table there is nothing honest to say, and
+                    // guessing a driver is how a machine ends up without a
+                    // screen.
+                    let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        "hardware.profile" => {
+            let inventory = crate::hardware::Inventory::read();
+            let profile = inventory.profile();
+            Some(json!({
+                "profile": profile.label(),
+                "vram_mb": inventory.gpus.iter().filter_map(|g| g.vram_mb).max(),
+                "memory_mb": inventory.memory.total_mb,
+                "cpu_level": inventory.cpu.microarchitecture_level,
+                "baseline_ok": inventory.cpu.baseline_ok,
+            }))
+        }
+
         "pulse.status" => {
             let machine = MachineState::read();
             let today = daemon.energy.today().unwrap_or_else(|_| crate::scheduler::power::DayEnergy {
