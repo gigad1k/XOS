@@ -51,6 +51,9 @@ enum Command {
     /// Search, inspect and promote what XOS remembers.
     #[command(subcommand)]
     Memory(MemoryCommand),
+    /// Inspect the capability firewall.
+    #[command(subcommand)]
+    Policy(PolicyCommand),
     /// Write an encrypted bundle of everything XOS remembers.
     Export { path: String },
     /// Merge a bundle back in. Nothing already here is overwritten.
@@ -60,6 +63,22 @@ enum Command {
         /// How many days back to report.
         #[arg(long, default_value_t = 7)]
         days: u32,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PolicyCommand {
+    /// Show recent policy decisions.
+    Log {
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Ask what would happen, without doing it.
+    Test {
+        tool: String,
+        /// Arguments as JSON, for example '{"path":"~/.ssh/id_rsa"}'
+        #[arg(default_value = "{}")]
+        arguments: String,
     },
 }
 
@@ -135,6 +154,12 @@ fn main() -> std::process::ExitCode {
         Command::Spend { days } => vault::spend(&mut connection, days),
         Command::Escalations { limit } => vault::escalations(&mut connection, limit),
         Command::Export { path } => vault::export(&mut connection, &path),
+        Command::Policy(command) => match command {
+            PolicyCommand::Log { limit } => vault::policy_log(&mut connection, limit),
+            PolicyCommand::Test { tool, arguments } => {
+                vault::policy_test(&mut connection, &tool, &arguments)
+            }
+        },
         Command::Import { path } => vault::import(&mut connection, &path),
         Command::Memory(command) => match command {
             MemoryCommand::Search { query, tier, limit } => {

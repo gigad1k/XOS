@@ -29,6 +29,8 @@ use providers::llama_cpp::LlamaCppProvider;
 use providers::openai::OpenAiCompatibleProvider;
 use providers::ProviderRegistry;
 use memory::Memory;
+use policy::log::PolicyLog;
+use policy::Policy;
 use router::log::EscalationLog;
 use router::Router;
 use rpc::Daemon;
@@ -172,6 +174,15 @@ async fn run() -> Result<(), String> {
     );
     info!(embedder = %memory.embedder().label(), "memory opened");
 
+    let policy = Arc::new(Policy::new(config.policy.clone()));
+    let policy_log = Arc::new(
+        PolicyLog::open(&config::policy_log_path()).map_err(|e| format!("policy log: {}", e))?,
+    );
+    info!(
+        strictness = config.policy.strictness.label(),
+        "policy engine ready"
+    );
+
     let escalations = Arc::new(
         EscalationLog::open(&config::escalations_path())
             .map_err(|e| format!("escalation log: {}", e))?,
@@ -186,6 +197,8 @@ async fn run() -> Result<(), String> {
         router,
         escalations,
         Arc::clone(&memory),
+        policy,
+        policy_log,
     ));
 
     if config.export.enabled {

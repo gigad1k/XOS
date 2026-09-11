@@ -9,7 +9,7 @@
 | 5 | P4 | XOS Vault and cloud providers | done | |
 | 6 | P5 | Router and escalation log | done | *GATE* |
 | 7 | P6 | XOS Memory, export and import | done | |
-| 8 | P7 | Policy engine and egress protection | in-progress | *GATE* |
+| 8 | P7 | Policy engine and egress protection | done | *GATE* |
 | 9 | P7b | Action journal and undo | todo | *GATE* |
 | 10 | P8 | Supervisor | todo | |
 | 11 | P9 | XOS Goals, the task graph | todo | |
@@ -202,3 +202,32 @@ real disks.
 - Scheduled export is off by default. When enabled it needs both a path and a
   passphrase in the environment variable named in config; if either is missing
   the daemon says so once at startup rather than silently writing nothing.
+
+- P7 — done. Check passed on both halves. A read of `~/.ssh/id_rsa` blocks, in
+  tilde and absolute form, and so do `.aws`, `.pem` and `.env`. A fake key was
+  put in a temp file and handed to a cloud provider; it did not reach the API.
+- P7 GATE — the egress half was proved on the wire, not by unit test. A
+  capturing HTTP endpoint stood in for the cloud API and recorded exactly what
+  the daemon sent: `[redacted: assigned-secret]` in place of the key, with the
+  surrounding config intact. That is the assertion worth trusting, because
+  testing the scanner alone would only prove the scanner runs, not that the
+  transport calls it.
+- The two axes are judged independently and blocks win. Loosening strictness to
+  permissive relaxes prompting only; a secret path stays blocked and egress is
+  still scanned. There is a test that holds that line.
+- Verb matching had a real bug the tests caught: `draft_reply` prompted, because
+  "reply" is irreversible. It is not the action — the leading word is. Drafting
+  a reply is reversible and sending one is not, and prompting for the draft
+  would have trained people to click through prompts, which is how a capability
+  firewall stops working.
+- The audit log records the spans it removed rather than a placeholder. The
+  first run logged "0 credential-shaped strings removed" after removing one; a
+  security record that undercounts is worse than none.
+- Policy log arguments are redacted before they are stored, so the log does not
+  become the thing worth stealing.
+- `Permit` is the guardrail: a tool may only run when the engine has issued one,
+  and `authorises` carries the debug assertion. It has no caller yet because XOS
+  has no tool executor yet, which is why it is marked allow(dead_code) with the
+  reason in the source. The first executor, in P9, must call it on every call.
+- Unverified: the local SearXNG rule is enforced and tested, but no SearXNG
+  instance exists here to route to.

@@ -390,3 +390,71 @@ pub fn import(connection: &mut Connection, path: &str) -> Result<String, String>
     }
     Ok(out)
 }
+
+/// `xos policy test <tool> <args>`
+pub fn policy_test(
+    connection: &mut Connection,
+    tool: &str,
+    arguments: &str,
+) -> Result<String, String> {
+    let parsed: Value = if arguments.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(arguments)
+            .map_err(|e| format!("the arguments are not JSON: {}", e))?
+    };
+    let result = connection.call("policy.test", json!({"tool": tool, "arguments": parsed}))?;
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{:<10} {}",
+        result.get("decision").and_then(Value::as_str).unwrap_or("-"),
+        result.get("reason").and_then(Value::as_str).unwrap_or("")
+    );
+    if !result.get("runs").and_then(Value::as_bool).unwrap_or(false) {
+        let _ = writeln!(out, "This call does not run, whatever you answer next.");
+    }
+    Ok(out)
+}
+
+/// `xos policy log`
+pub fn policy_log(connection: &mut Connection, limit: u32) -> Result<String, String> {
+    let result = connection.call("policy.log", json!({"limit": limit}))?;
+    let entries = result
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "strictness  {}",
+        result.get("strictness").and_then(Value::as_str).unwrap_or("-")
+    );
+    let _ = writeln!(out);
+    if entries.is_empty() {
+        let _ = writeln!(out, "No decisions recorded yet.");
+        return Ok(out);
+    }
+    let _ = writeln!(
+        out,
+        "{:<9} {:<20} {:<10}  {}",
+        "decision", "tool", "source", "reason"
+    );
+    for entry in &entries {
+        let text = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or("-");
+        let _ = writeln!(
+            out,
+            "{:<9} {:<20} {:<10}  {}",
+            text("decision"),
+            text("tool"),
+            text("source"),
+            text("reason")
+        );
+    }
+    Ok(out)
+}

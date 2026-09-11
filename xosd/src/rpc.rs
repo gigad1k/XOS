@@ -18,6 +18,10 @@ use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, info, warn};
 
 use crate::memory::{bundle, Memory, Tier};
+use crate::policy::log::PolicyLog;
+use crate::policy::{
+    digest, redact, Context as PolicyContext, Permit, Policy, PolicyDecision,
+};
 use crate::providers::{CompletionRequest, Message, ProviderRegistry};
 use crate::router::log::{EscalationLog, Record};
 use crate::router::{self, CostMode, Observation, Router, Tier as RouteTier};
@@ -64,6 +68,8 @@ pub struct Daemon {
     pub router: RwLock<Router>,
     pub escalations: Arc<EscalationLog>,
     pub memory: Arc<Memory>,
+    pub policy: Arc<Policy>,
+    pub policy_log: Arc<PolicyLog>,
     pub version: &'static str,
 }
 
@@ -77,6 +83,8 @@ impl Daemon {
         router: Router,
         escalations: Arc<EscalationLog>,
         memory: Arc<Memory>,
+        policy: Arc<Policy>,
+        policy_log: Arc<PolicyLog>,
     ) -> Self {
         Self {
             registry,
@@ -87,6 +95,8 @@ impl Daemon {
             router: RwLock::new(router),
             escalations,
             memory,
+            policy,
+            policy_log,
             version: env!("CARGO_PKG_VERSION"),
         }
     }
@@ -275,6 +285,97 @@ async fn dispatch(
                     None
                 }
             }
+        }
+
+        // Judge a call without running it. This is `xos policy test`.
+        "policy.test" => {
+            let tool = request
+                .params
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let arguments = request
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(Value::Object(Default::default()));
+            let context = PolicyContext {
+                api_bound: request
+                    .params
+                    .get("api_bound")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                untrusted_source: request
+                    .params
+                    .get("untrusted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                local_only: daemon.cost_mode() == CostMode::AggressiveLocal,
+            };
+
+            let decision = daemon.policy.evaluate(tool, &arguments, &context);
+            let _ = daemon.policy_log.record(
+                tool,
+                &arguments.to_string(),
+                &decision,
+                "policy.test",
+            );
+            // A permit is the only thing that lets a tool run, so reporting
+            // whether one would be issued answers the question people actually
+            // have: would this go ahead?
+            let permit = Permit::issue(tool, decision.clone());
+            Some(json!({
+                "tool": tool,
+                "decision": decision.label(),
+                "reason": decision.reason(),
+                "runs": decision.runs(),
+                "permit_issued": permit.as_ref().map(|permit| permit.tool()),
+            }))
+        }
+
+        "policy.log" => {
+            let limit = request
+                .params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20) as u32;
+            match daemon.policy_log.recent(limit) {
+                Ok(entries) => Some(json!({
+                    "entries": entries,
+                    "strictness": daemon.policy.config().strictness.label(),
+                })),
+                Err(error) => {
+                    let body = failure(request.id.clone(), INTERNAL_ERROR, &error);
+                    let _ = write_line(writer, &body).await;
+                    None
+                }
+            }
+        }
+
+        // Build the bounded, redacted packet the supervisor tier receives.
+        "policy.digest" => {
+            let pieces: Vec<digest::Piece> = request
+                .params
+                .get("pieces")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| {
+                            digest::Piece::new(
+                                item.get("source").and_then(Value::as_str).unwrap_or("unknown"),
+                                item.get("content").and_then(Value::as_str).unwrap_or(""),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let cap = request
+                .params
+                .get("token_cap")
+                .and_then(Value::as_u64)
+                .unwrap_or(digest::TOKEN_CAP as u64) as usize;
+            Some(serde_json::to_value(digest::build(&pieces, cap)).unwrap_or(Value::Null))
         }
 
         "memory.write" => {
@@ -784,7 +885,47 @@ async fn run_attempt(
         return Err(());
     }
 
-    let mut stream = match provider.complete(params.request.clone()).await {
+    // Egress protection. A local provider keeps everything on the machine, so
+    // nothing needs removing; a cloud provider does not, so every message is
+    // scanned first. This is the axis reversibility misses: reading a file is
+    // reversible, and the secret inside it leaving is not.
+    let mut outgoing = params.request.clone();
+    if !provider.capabilities().local {
+        let egress = PolicyContext {
+            api_bound: true,
+            ..Default::default()
+        };
+        // Keep the spans, not just a count: the log has to be able to say what
+        // was removed, and a security record that undercounts is worse than none.
+        let mut removed_spans = Vec::new();
+        for message in outgoing.messages.iter_mut() {
+            if let PolicyDecision::Redact { spans } =
+                daemon.policy.evaluate_result(&message.content, &egress)
+            {
+                message.content = redact::apply(&message.content, &spans);
+                removed_spans.extend(spans);
+            }
+        }
+        let removed = removed_spans.len();
+        if removed > 0 {
+            let decision = PolicyDecision::Redact {
+                spans: removed_spans,
+            };
+            warn!(
+                provider = %name,
+                removed,
+                "credential-shaped strings removed before leaving the machine"
+            );
+            let _ = daemon.policy_log.record(
+                "complete",
+                &format!("{} messages bound for {}", outgoing.messages.len(), name),
+                &decision,
+                "egress",
+            );
+        }
+    }
+
+    let mut stream = match provider.complete(outgoing).await {
         Ok(stream) => stream,
         Err(error) => {
             let body = failure(request.id.clone(), INTERNAL_ERROR, &error.to_string());

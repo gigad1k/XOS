@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::providers::anthropic::AnthropicConfig;
 use crate::providers::llama_cpp::LlamaCppConfig;
 use crate::memory::embed::EmbedderConfig;
+use crate::policy::PolicyConfig;
 use crate::providers::openai::OpenAiConfig;
 use crate::router::RouterConfig;
 use crate::spend::Caps;
@@ -55,6 +56,9 @@ pub struct Config {
     /// Scheduled export. Off unless asked for.
     #[serde(default)]
     pub export: ExportConfig,
+    /// The capability firewall.
+    #[serde(default)]
+    pub policy: PolicyConfig,
 }
 
 /// A scheduled, encrypted export of everything XOS remembers.
@@ -117,6 +121,7 @@ impl Default for Config {
             router: RouterConfig::default(),
             embedder: EmbedderConfig::default(),
             export: ExportConfig::default(),
+            policy: PolicyConfig::default(),
         }
     }
 }
@@ -134,6 +139,14 @@ pub fn vault_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("xos")
+}
+
+/// The policy decision log.
+pub fn policy_log_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("xos")
+        .join("policy.db")
 }
 
 /// Where memory lives.
