@@ -131,6 +131,87 @@ impl Connection {
     pub fn call(&mut self, _method: &str, _params: Value) -> Result<Value, String> {
         Err("the XOS daemon socket needs a Unix system".to_string())
     }
+
+    /// Run a streaming call, handing each piece to `sink` as it arrives.
+    ///
+    /// The daemon interleaves `complete.delta` notifications with the final
+    /// result, so the caller sees tokens as they are generated rather than
+    /// waiting for the whole reply.
+    #[cfg(unix)]
+    pub fn stream(
+        &mut self,
+        method: &str,
+        params: Value,
+        mut sink: impl FnMut(StreamEvent),
+    ) -> Result<(), String> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        let mut line = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+        line.push(b'\n');
+        self.stream
+            .write_all(&line)
+            .map_err(|e| format!("cannot send `{}`: {}", method, e))?;
+        self.stream.flush().map_err(|e| e.to_string())?;
+
+        let reader = BufReader::new(
+            self.stream
+                .try_clone()
+                .map_err(|e| format!("cannot read the reply: {}", e))?,
+        );
+        for line in reader.lines() {
+            let line = line.map_err(|e| format!("cannot read the reply: {}", e))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let message: Value = match serde_json::from_str(&line) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            if message.get("method").and_then(Value::as_str) == Some("complete.delta") {
+                if let Some(text) = message.pointer("/params/text").and_then(Value::as_str) {
+                    sink(StreamEvent::Delta(text.to_string()));
+                }
+                continue;
+            }
+            if message.get("id").and_then(Value::as_u64) != Some(id) {
+                continue;
+            }
+            if let Some(error) = message.get("error") {
+                let text = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the daemon refused the call");
+                sink(StreamEvent::Failed(text.to_string()));
+                return Ok(());
+            }
+            sink(StreamEvent::Done(
+                message.get("result").cloned().unwrap_or(Value::Null),
+            ));
+            return Ok(());
+        }
+        Err("the daemon closed the connection mid-reply".to_string())
+    }
+
+    #[cfg(not(unix))]
+    pub fn stream(
+        &mut self,
+        _method: &str,
+        _params: Value,
+        _sink: impl FnMut(StreamEvent),
+    ) -> Result<(), String> {
+        Err("the XOS daemon socket needs a Unix system".to_string())
+    }
+}
+
+/// One piece of a streaming call.
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    Delta(String),
+    Done(Value),
+    Failed(String),
 }
 
 #[cfg(test)]

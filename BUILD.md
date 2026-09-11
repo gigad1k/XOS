@@ -5,7 +5,7 @@
 | 1 | P0 | Repository scaffold | done | |
 | 2 | P1 | XOS Bench — tool-call harness | done | *GATE* |
 | 3 | P2 | xosd skeleton, provider trait, halt primitive | done | |
-| 4 | P3 | xos chat TUI | in-progress | |
+| 4 | P3 | xos chat TUI | done | |
 | 5 | P4 | XOS Vault and cloud providers | todo | |
 | 6 | P5 | Router and escalation log | todo | *GATE* |
 | 7 | P6 | XOS Memory, export and import | todo | |
@@ -99,3 +99,21 @@ real disks.
   removed rather than silenced; add them when a caller needs one.
 - The CLI treats a closed pipe as a normal end, so `xos status | head` does not
   panic. The first run of the check found that by piping into head.
+
+- P3 — done. Check passed against a live model: the TUI streams a reply token by
+  token and the status line shows a live figure, 164.8 tok/s during generation
+  and 258.2 tok/s after. Verified by driving the real binary inside a pty and
+  reading the escape codes back: box rules render in `#454340`, the local tier in
+  `#7A9B6E`, both exact from STYLE.md, and no fourth hue appears.
+- The TUI holds no model logic, per the guardrail. It calls `status` once for the
+  provider and its tier, then every message is a `complete` call over JSON-RPC.
+  xosd was not modified.
+- The live rate counts `complete.delta` notifications, since the daemon emits one
+  per token. The exact count from `usage.output_tokens` replaces the estimate when
+  the reply finishes, so the figure settles to the truth rather than drifting.
+- Testing a ratatui program in a pty needs TIOCSWINSZ set explicitly. A forked pty
+  defaults to 0x0 and ratatui renders nothing into no space, which reads exactly
+  like a hung interface. Worth knowing for P11 and P12, which also draw.
+- The local config now points at `llama3.2:latest` rather than `gemma4:e4b`, since
+  that is what this machine has. That is in `~/.config/xos/config.toml`, not the
+  repository, so it affects nothing for anyone else.

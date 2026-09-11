@@ -3,7 +3,9 @@
 //! A thin client over xosd. It holds no intelligence of its own: every command
 //! is a JSON-RPC call over the daemon's Unix socket.
 
+mod chat;
 mod socket;
+mod theme;
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
@@ -29,10 +31,24 @@ enum Command {
     Resume,
     /// Report daemon health, the halt flag and the configured providers.
     Status,
+    /// Open the chat interface. This is the default way to use XOS.
+    Chat,
 }
 
 fn main() -> std::process::ExitCode {
     let args = Args::parse();
+
+    // Chat owns the terminal, so it opens its own connections.
+    if matches!(args.command, Command::Chat) {
+        return match chat::run(args.socket.clone()) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("xos: {}", error);
+                eprintln!("     Start it with `xosd`, or point at it with --socket.");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
 
     let mut connection = match Connection::open(args.socket.clone()) {
         Ok(connection) => connection,
@@ -47,6 +63,7 @@ fn main() -> std::process::ExitCode {
         Command::Halt => halt(&mut connection),
         Command::Resume => resume(&mut connection),
         Command::Status => status(&mut connection),
+        Command::Chat => unreachable!("chat is handled before the socket is opened"),
     }
     .and_then(|text| emit(&text));
 
