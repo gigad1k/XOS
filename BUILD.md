@@ -8,7 +8,7 @@
 | 4 | P3 | xos chat TUI | done | |
 | 5 | P4 | XOS Vault and cloud providers | done | |
 | 6 | P5 | Router and escalation log | done | *GATE* |
-| 7 | P6 | XOS Memory, export and import | todo | |
+| 7 | P6 | XOS Memory, export and import | in-progress | |
 | 8 | P7 | Policy engine and egress protection | todo | *GATE* |
 | 9 | P7b | Action journal and undo | todo | *GATE* |
 | 10 | P8 | Supervisor | todo | |
