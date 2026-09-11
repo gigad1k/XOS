@@ -4,11 +4,13 @@
 //! imports a model provider, MCP server or channel gateway directly.
 
 mod config;
+mod firstrun;
 mod graph;
 mod hardware;
 mod journal;
 mod memory;
 mod mission;
+mod models;
 mod policy;
 mod providers;
 mod router;

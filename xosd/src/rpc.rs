@@ -368,6 +368,56 @@ async fn dispatch(
             }
         }
 
+        // What this machine should run, and why not the others. One place
+        // decides it, so the wizard and the install script cannot disagree
+        // about what a machine can hold.
+        "models.recommend" => {
+            let inventory = crate::hardware::Inventory::read();
+            match crate::models::Catalogue::load() {
+                Ok(catalogue) => {
+                    Some(serde_json::to_value(catalogue.recommend(&inventory))
+                        .unwrap_or(Value::Null))
+                }
+                Err(error) => Some(json!({
+                    "reason": error,
+                    "available_vram_mb": inventory.gpus.iter()
+                        .filter_map(|g| g.vram_mb).max().unwrap_or(0),
+                    "memory_mb": inventory.memory.total_mb,
+                    "profile": inventory.profile().label(),
+                    "rejected": [],
+                })),
+            }
+        }
+
+        // The first run. The wizard asks what this will do before doing it,
+        // because the first thing an agentic system does in front of somebody
+        // sets what they expect of it forever.
+        "firstrun.describe" => Some(json!({
+            "goal": crate::firstrun::describe(),
+            "already_run": crate::firstrun::has_run(daemon),
+        })),
+
+        "firstrun.run" => {
+            if crate::firstrun::has_run(daemon) && request.params.get("again").is_none() {
+                // Running it twice would put a second, near-identical summary
+                // into long-term memory and teach the graph nothing new.
+                Some(json!({
+                    "ok": false,
+                    "already_run": true,
+                    "reason": "the first goal has already run on this machine",
+                }))
+            } else {
+                match crate::firstrun::run(daemon) {
+                    Ok(outcome) => Some(json!({"ok": true, "outcome": outcome})),
+                    Err(error) => {
+                        // The wizard must still reach a usable state, so this is
+                        // reported rather than made fatal.
+                        Some(json!({"ok": false, "error": error}))
+                    }
+                }
+            }
+        }
+
         // Hardware. Read-only in the strongest sense: this never installs,
         // loads or modifies anything. HW-2 owns installation, and keeping the
         // line here means detection can be run on a machine that is already

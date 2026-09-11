@@ -107,6 +107,28 @@ async fn route(
         ("GET", "/") | ("GET", "/index.html") => {
             ("200 OK", "text/html; charset=utf-8", PAGE.to_string())
         }
+        // The first run, matching the terminal wizard. Both ask the daemon what
+        // the goal will do, and both run the same one.
+        ("GET", "/api/firstrun") => (
+            "200 OK",
+            "application/json",
+            json!({
+                "goal": crate::firstrun::describe(),
+                "already_run": crate::firstrun::has_run(daemon),
+            })
+            .to_string(),
+        ),
+        ("POST", "/api/firstrun/run") => {
+            let outcome = if crate::firstrun::has_run(daemon) {
+                json!({"ok": false, "already_run": true})
+            } else {
+                match crate::firstrun::run(daemon) {
+                    Ok(outcome) => json!({"ok": true, "outcome": outcome}),
+                    Err(error) => json!({"ok": false, "error": error}),
+                }
+            };
+            ("200 OK", "application/json", outcome.to_string())
+        }
         ("GET", "/api/state") => (
             "200 OK",
             "application/json",
@@ -268,6 +290,18 @@ mod tests {
             }
             index += 1;
         }
+    }
+
+    #[test]
+    fn the_page_carries_the_first_run_view() {
+        // Somebody who did the wizard in a terminal and somebody who did it in
+        // a browser must end up in the same place.
+        assert!(PAGE.contains("first run"), "no first-run view");
+        assert!(PAGE.contains("/api/firstrun"), "it cannot ask what the goal does");
+        assert!(
+            PAGE.contains("without opening anything"),
+            "it must say what the goal touches before running it"
+        );
     }
 
     #[test]

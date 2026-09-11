@@ -227,9 +227,21 @@ impl Profile {
 }
 
 /// VRAM below this cannot hold a useful model alongside a desktop.
-const MIN_LOCAL_VRAM_MB: u64 = 4096;
+///
+/// Written against what a card reports rather than what it is sold as. A card
+/// sold as 4GB reports a little under 4096 once its own firmware has taken a
+/// share, so the round number would exclude every 4GB card there is.
+const MIN_LOCAL_VRAM_MB: u64 = 3800;
+
 /// Below this much system memory, CPU inference is not worth offering.
-const MIN_CPU_MEMORY_MB: u64 = 8192;
+///
+/// Same reasoning, and it matters more here. A machine sold as 8GB reports
+/// something near 7800 MB, because firmware and an integrated GPU take their
+/// cut before Linux sees any of it. At 8192 this said `api-only` for every 8GB
+/// machine on earth, and the specification says in as many words that 8GB
+/// machines are what XOS is for: it would have told the owner of its own target
+/// machine that it could not run a local model.
+const MIN_CPU_MEMORY_MB: u64 = 7600;
 
 impl Inventory {
     pub fn read() -> Self {
@@ -813,6 +825,27 @@ mod tests {
         let mut inventory = capable();
         inventory.gpus[0].vram_mb = Some(512);
         assert_eq!(inventory.profile(), Profile::Cpu);
+    }
+
+    #[test]
+    fn a_real_8gb_machine_is_not_told_it_is_too_small() {
+        // The machine XOS exists for. A threshold of 8192 excluded it, because
+        // no 8GB machine ever reports 8192.
+        let mut inventory = capable();
+        inventory.gpus.clear();
+        inventory.memory.total_mb = 7800;
+        assert_eq!(
+            inventory.profile(),
+            Profile::Cpu,
+            "an 8GB machine was told it could not run a local model"
+        );
+    }
+
+    #[test]
+    fn a_real_4gb_card_counts_as_a_usable_gpu() {
+        let mut inventory = capable();
+        inventory.gpus[0].vram_mb = Some(4020);
+        assert_eq!(inventory.profile(), Profile::Local);
     }
 
     #[test]

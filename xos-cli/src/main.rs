@@ -6,6 +6,7 @@
 mod bar;
 mod chat;
 mod hardware;
+mod setup;
 mod socket;
 mod theme;
 mod vault;
@@ -36,6 +37,14 @@ enum Command {
     Status,
     /// Open the chat interface. This is the default way to use XOS.
     Chat,
+    /// The first-run wizard. Every step can be skipped, and XOS works
+    /// afterwards either way. Run it again any time.
+    Setup {
+        /// Take the default for every step and skip the rest. Used by the
+        /// installer, and by anyone who just wants the machine working.
+        #[arg(long)]
+        skip_all: bool,
+    },
     /// Manage API credentials. Keys are stored by the daemon, never by this client.
     #[command(subcommand)]
     Vault(VaultCommand),
@@ -233,6 +242,7 @@ fn main() -> std::process::ExitCode {
         Command::Halt => halt(&mut connection),
         Command::Resume => resume(&mut connection),
         Command::Status => status(&mut connection),
+        Command::Setup { skip_all } => setup::run(&mut connection, skip_all),
         Command::Spend { days } => vault::spend(&mut connection, days),
         Command::Hardware {
             json,

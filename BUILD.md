@@ -19,7 +19,7 @@
 | 15 | HW-1 | Hardware detection | done | |
 | 16 | HW-2 | Driver resolution and installation | done | *GATE* |
 | 17 | P13 | Installer | done | *GATE* |
-| 18 | P14 | First-run experience and first goal | in-progress | |
+| 18 | P14 | First-run experience and first goal | done | |
 
 ## Status values
 todo · in-progress · done · blocked
@@ -700,3 +700,110 @@ What a human should verify, and why:
 Deliberate scope decision, again recorded: this task wrote the installer and did
 not run it. No disk was partitioned, no bootloader written, no package installed
 and no service enabled on the machine this was built on.
+
+### P14 - First-run experience and first goal
+
+- `xos setup` is the wizard: nine steps, in the order the prompt gives them,
+  every one skippable. `--skip-all` takes the default for everything, which is
+  what the installer uses and what the check runs.
+- Skipping all nine is a supported path with its own test, and the finish says
+  so in as many words: "You skipped all of it, and XOS still works. It runs on
+  this machine, offline, with no account and no key." The person who most needs
+  that sentence is the one who skipped every step.
+- The rendering is a pure function over the wizard state, the way the status bar
+  is, so all nine steps are tested without a terminal.
+- Things the steps do rather than say:
+  - The hardware step lists what is **not** working and why, including a card
+    that is not in hardware-db.json. Left out, somebody finds it a week later
+    and has no idea it was known about on day one.
+  - The model step shows the fit in numbers - what the model wants against what
+    the machine has - because a forty-minute download that turns out not to fit
+    is a bad first hour.
+  - The policy step describes what each choice permits in plain words and never
+    shows the mode names. Somebody in their first minute has no idea what
+    "balanced" means.
+  - Messaging puts both warnings before the offer: use a dedicated number, and
+    an allowlist is required before it turns on at all.
+  - The kill switch step asks somebody to press Ctrl+Alt+Escape and actually
+    halts and resumes the daemon when they do. A control nobody has used is one
+    they will not reach for at the moment they need it.
+- The first goal is built in and fixed, written out rather than planned by a
+  model: three nodes, each waiting on the one before, so Mission Control shows
+  it working rather than three nodes turning green at once.
+- It is read-only in the strong sense. `firstrun/scan.rs` lists directories and
+  opens nothing, and there is a test that greps its own source for
+  `read_to_string`, `File::open` and `fs::read` and fails if any appears. Every
+  listing goes through the policy engine, so a directory somebody has marked
+  private is invisible to the first goal exactly as it is to everything else.
+  A missing or unreadable directory is skipped without a word.
+- What goes into memory is about the shape of the work, never a filename. There
+  is a test that puts "tax return 2024.pdf" and "divorce settlement.pdf" in the
+  sample and asserts neither reaches the summary. The guess about what somebody
+  works on is always marked as a guess, because it is inferred from filenames and
+  a confident wrong statement about a person is a worse first impression than
+  none at all.
+- Mission Control has the matching view, reading the same `firstrun.describe`
+  and running the same goal through the same code, so somebody who set up in a
+  terminal and somebody who set up in a browser end in the same place.
+- `models.recommend` was added to the daemon so the wizard and the install script
+  read verified-models.json through one rule rather than two. It reports what did
+  not fit and why, with the numbers, because somebody wondering why they were not
+  offered the big model deserves the answer.
+- The check passes: the wizard completes with every step skipped, the first goal
+  runs and writes one entry to long-term memory, and `xos chat` answers offline
+  on the local tier with no API key configured anywhere. Running the wizard a
+  second time does not run the goal again.
+- Two defects found by running it:
+  1. **`xos setup | head` aborted the wizard partway.** `print!` panics when the
+     other end of the pipe has gone, so the machine was set up and the one goal
+     that demonstrates it was silently skipped - the worst possible version of
+     that bug, because everything looked fine. All output now goes through a
+     writer that treats a closed pipe as a closed pipe, and a test greps the
+     module for `print!` and `println!` to keep it that way.
+  2. **The 8GB thresholds from HW-1, which this task had to fix rather than
+     record.** See below.
+
+#### A file from a completed task was edited, and why
+
+`MIN_CPU_MEMORY_MB` in `xosd/src/hardware/mod.rs` was 8192 and
+`MIN_LOCAL_VRAM_MB` was 4096. No machine sold as 8GB reports 8192 MB, and no
+card sold as 4GB reports 4096, because firmware takes its share before Linux
+sees any of it. The effect was that a real 8GB machine was reported `api-only`,
+and P14's own model step then had nothing to offer it - on the machine the
+specification names as the target.
+
+This was recorded at the P13 gate as something to fix rather than fixed, per
+driver.txt. It then broke this task's check, so it is fixed here: 7600 and 3800,
+with the reasoning written next to the constants and two tests pinning it. The
+deviation from driver.txt is deliberate and recorded, which is what that rule
+asks for when an earlier task turns out to be wrong.
+
+#### A gap in the specification, recorded rather than filled
+
+The reason given for choosing this first goal is that it "seeds memory so the
+second interaction is already personalised". It does seed memory: the entry is
+written, `xos memory search` finds it, and the long-term tier reports one entry.
+
+But nothing recalls it into a conversation. Asked "what do you know about this
+machine?" immediately afterwards, XOS answers that it does not know - correctly,
+because the `complete` path never touches memory. `memory.recall` exists and is
+exposed over RPC and the CLI, and nothing calls it while answering.
+
+No prompt in this build asks for that. P3 specifies `memory.recall` as an RPC and
+a CLI search and nothing more, and its guardrail says not to change the router,
+which is where conversational context is assembled. So this is a gap in the
+specification rather than a defect in any task, and filling it would mean
+building something no prompt describes.
+
+It is the single most valuable thing to do next. Until it exists, memory is a
+filing cabinet that XOS never opens while talking to you, and the first goal's
+stated purpose is only half true.
+
+#### Verification limits
+
+No GTX 1080, so the reference hardware path is still unobserved. The wizard was
+run headless with every step skipped and driven through a pty for the chat step;
+the interactive branches of the steps that shell out - `gh auth login`, `rclone
+config`, the WhatsApp QR - were not exercised, because each opens somebody else's
+login flow. Mission Control's first-run view was exercised through its endpoints,
+not rendered in a browser.

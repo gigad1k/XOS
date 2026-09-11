@@ -150,6 +150,13 @@ body.halted .banner { display: block; }
 
 <main>
   <section>
+    <!-- The first run. Present only until the first goal has run, because
+         after that it is a button that does nothing anybody wants twice. -->
+    <div class="attention" id="firstrun" style="display:none">
+      <h2>first run</h2>
+      <div id="firstrun-body"></div>
+    </div>
+
     <div class="attention" id="attention" style="display:none">
       <h2>needs you</h2>
       <div id="attention-items"></div>
@@ -214,6 +221,23 @@ function row(k, v, cls) {
          `<span class="v ${cls || ""}">${esc(v)}</span></div>`;
 }
 
+async function firstRun() {
+  const answer = await fetch("/api/firstrun").then(r => r.json()).catch(() => null);
+  const body = renderFirstRun(answer);
+  $("firstrun").style.display = body ? "" : "none";
+  if (!body) return;
+  $("firstrun-body").innerHTML = body;
+  $("firstrun-go").onclick = async () => {
+    $("firstrun-state").textContent = " running...";
+    $("firstrun-go").disabled = true;
+    await fetch("/api/firstrun/run", {method: "POST"});
+    // The goals panel picks it up on the next refresh, which is where somebody
+    // watches it happen. That is the point of running it here at all.
+    refresh();
+    firstRun();
+  };
+}
+
 async function post(path, body) {
   await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
                      body: JSON.stringify(body || {})});
@@ -225,6 +249,28 @@ $("halt").onclick = () => post(document.body.classList.contains("halted")
 $("mode-local").onclick   = () => post("/api/mode", {mode: "aggressive-local"});
 $("mode-balanced").onclick = () => post("/api/mode", {mode: "balanced"});
 $("mode-quality").onclick  = () => post("/api/mode", {mode: "best-quality"});
+
+// What the first goal will do, said before it does it. The same words the
+// terminal wizard uses, from the same place in the daemon.
+function renderFirstRun(data) {
+  const goal = (data && data.goal) || {};
+  if (!data || data.already_run) return "";
+  const steps = (goal.steps || []).map(s =>
+    `<div class="node pending"><b>${esc(s.title)}</b>` +
+    `<div class="muted">${esc(s.detail)}</div></div>`).join("");
+  return `
+    <p>XOS has not done anything yet. It can start with one thing, so you
+       can watch it work before trusting it with something real.</p>
+    <p><b>${esc(goal.description)}</b></p>
+    ${steps}
+    <p class="muted">
+      It lists ${esc((goal.reads || []).join(", "))} without opening anything.
+      It writes ${esc(goal.writes)}.
+      Nothing leaves this machine and nothing here is irreversible.
+    </p>
+    <button id="firstrun-go">run it</button>
+    <span class="muted" id="firstrun-state"></span>`;
+}
 
 function renderGoals(goals) {
   if (!goals.length) return `<div class="muted">No goals yet.</div>`;
@@ -324,6 +370,7 @@ function refresh() {
 }
 
 refresh();
+firstRun();
 setInterval(refresh, 2000);
 </script>
 </body>
