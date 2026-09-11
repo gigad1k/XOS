@@ -28,8 +28,22 @@ pub struct Database {
     pub updated: String,
     pub nvidia_branches: NvidiaBranches,
     pub amd_generations: AmdGenerations,
+    pub generic_display: GenericDisplay,
     #[serde(default)]
     pub entries: Vec<Entry>,
+}
+
+/// What a display device gets when its vendor has no row.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GenericDisplay {
+    pub driver: String,
+    #[serde(default)]
+    pub firmware: Vec<String>,
+    pub fallback: Vec<String>,
+    #[serde(default)]
+    pub confidence: String,
+    // The `note` beside this in the JSON is for whoever edits the table, not
+    // for the code. Serde ignores it, which is the right relationship.
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -339,8 +353,43 @@ impl Database {
                 why: entry.why.clone(),
                 kernel_driver_in_use: device.kernel_driver.clone(),
             },
-            // An unknown device is reported as unknown. Naming a driver XOS has
-            // no reason to believe in is how people end up without a screen.
+            // A display device XOS has never seen still has to produce a
+            // picture, so it gets the generic path rather than the word
+            // "unknown". That is not a guess about the card, which the guardrail
+            // forbids: it is the generic userspace over whatever in-tree driver
+            // the kernel already bound, then the generic X driver, then a plain
+            // framebuffer. One of the three works on anything.
+            None if device.class == "display" => Resolution {
+                device: device.description.clone(),
+                vendor: None,
+                vendor_id: device.vendor_id.clone(),
+                device_id: device.device_id.clone(),
+                class: device.class.clone(),
+                architecture: None,
+                driver: self.generic_display.driver.clone(),
+                utils: None,
+                branch: None,
+                firmware: self.generic_display.firmware.clone(),
+                kernel_parameters: Vec::new(),
+                fallback: self.generic_display.fallback.clone(),
+                confidence: if self.generic_display.confidence.is_empty() {
+                    "generic".to_string()
+                } else {
+                    self.generic_display.confidence.clone()
+                },
+                why: Some(
+                    "this card is not in the database, so XOS is driving it \
+                     generically rather than guessing at a driver for it. That \
+                     works; it may not be the fastest it could be. Add a row if \
+                     you find something better."
+                        .to_string(),
+                ),
+                kernel_driver_in_use: device.kernel_driver.clone(),
+            },
+
+            // Anything else unknown is reported as unknown. Naming a driver XOS
+            // has no reason to believe in is how people end up without a screen,
+            // or without a network.
             //
             // In particular, not the module currently driving it: that is a
             // fact about this machine, reported separately, and it is very often
@@ -358,11 +407,7 @@ impl Database {
                 branch: None,
                 firmware: Vec::new(),
                 kernel_parameters: Vec::new(),
-                fallback: if device.class == "display" {
-                    vec!["vesa".to_string()]
-                } else {
-                    Vec::new()
-                },
+                fallback: Vec::new(),
                 confidence: "unknown".to_string(),
                 why: Some("not in the database; add a row if you get this working".to_string()),
                 kernel_driver_in_use: device.kernel_driver.clone(),
@@ -512,25 +557,145 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_card_says_so_rather_than_guessing() {
+    fn a_card_nobody_has_seen_is_still_driven() {
+        // The guardrail forbids guessing a driver for an unknown device ID. It
+        // does not ask XOS to leave somebody without a screen: the generic
+        // userspace over whatever the kernel already bound is a fallback, not a
+        // guess.
         let mut device = gpu("ffff");
         device.vendor_id = "dead".to_string();
         let resolution = database().resolve(&device);
-        assert_eq!(resolution.confidence, "unknown");
-        assert_eq!(resolution.driver, "unknown");
+        assert_eq!(resolution.confidence, "generic");
+        assert_eq!(resolution.driver, "mesa");
+        assert_eq!(
+            resolution.fallback,
+            vec!["modesetting".to_string(), "vesa".to_string()]
+        );
+        assert!(resolution
+            .why
+            .expect("a why")
+            .contains("rather than guessing"));
     }
 
     #[test]
-    fn an_unknown_card_does_not_pass_off_its_loaded_module_as_a_package() {
-        // The module driving a device now is a fact about this machine, not a
-        // thing to install. HW-2 reads `driver` as a package name, and handing
-        // it something like `dxgkrnl` fails at the package manager.
-        let mut device = gpu("008e");
-        device.vendor_id = "1414".to_string();
-        device.kernel_driver = Some("dxgkrnl".to_string());
+    fn an_unknown_device_that_is_not_a_display_still_says_unknown() {
+        // A network card that nothing drives is a fact to report, not a thing
+        // to paper over: there is no generic driver that makes a NIC work.
+        let device = Device {
+            bus: "pci".to_string(),
+            slot: "04:00.0".to_string(),
+            class: "network".to_string(),
+            description: "something new".to_string(),
+            vendor_id: "dead".to_string(),
+            device_id: "beef".to_string(),
+            subsystem_id: None,
+            kernel_driver: None,
+            vram_mb: None,
+        };
         let resolution = database().resolve(&device);
         assert_eq!(resolution.driver, "unknown");
-        assert_eq!(resolution.kernel_driver_in_use.as_deref(), Some("dxgkrnl"));
+        assert_eq!(resolution.confidence, "unknown");
+    }
+
+    #[test]
+    fn every_display_vendor_in_the_table_ends_at_a_framebuffer() {
+        // Whatever the card, the last thing tried must be something that works
+        // on any hardware that can show a picture at all.
+        let database = database();
+        for entry in database.entries.iter().filter(|e| e.class == "display") {
+            assert_eq!(
+                entry.fallback.last().map(String::as_str),
+                Some("vesa"),
+                "{} has no framebuffer at the end of its chain",
+                entry.vendor
+            );
+        }
+        assert_eq!(
+            database.generic_display.fallback.last().map(String::as_str),
+            Some("vesa")
+        );
+    }
+
+    #[test]
+    fn a_virtual_machine_gets_a_working_display() {
+        // The first place anyone runs XOS is a VM, including whoever is
+        // reading this. A guest that boots to a black screen is the worst
+        // possible first impression and the easiest one to avoid.
+        for (vendor_id, expected) in [
+            ("1af4", "virtio-gpu"),
+            ("1234", "bochs-drm"),
+            ("15ad", "vmwgfx"),
+            ("80ee", "vboxvideo"),
+            ("1414", "hyperv_drm"),
+        ] {
+            let mut device = gpu("0001");
+            device.vendor_id = vendor_id.to_string();
+            let resolution = database().resolve(&device);
+            assert_ne!(
+                resolution.driver, "unknown",
+                "{} is a virtual display and got nothing",
+                vendor_id
+            );
+            assert!(
+                resolution.fallback.iter().any(|f| f == expected),
+                "{} should fall back to {}, got {:?}",
+                vendor_id,
+                expected,
+                resolution.fallback
+            );
+        }
+    }
+
+    #[test]
+    fn the_old_chips_in_old_machines_are_covered() {
+        // Matrox and ASPEED are the onboard display in a great many of the
+        // machines XOS exists to make useful again.
+        for vendor_id in ["102b", "1a03", "1106", "1039", "1013", "5333"] {
+            let mut device = gpu("0001");
+            device.vendor_id = vendor_id.to_string();
+            let resolution = database().resolve(&device);
+            assert_eq!(resolution.driver, "mesa", "{}", vendor_id);
+            assert_eq!(resolution.confidence, "known", "{}", vendor_id);
+        }
+    }
+
+    #[test]
+    fn no_display_row_names_a_proprietary_driver_it_cannot_justify() {
+        // The guardrail. Only NVIDIA resolves through a branch table, and only
+        // because those branches are real and the mapping is written down.
+        for entry in database().entries.iter().filter(|e| e.class == "display") {
+            if entry.id == "pci:10de" {
+                continue;
+            }
+            let driver = entry.driver.clone().unwrap_or_default();
+            assert!(
+                !driver.contains("nvidia"),
+                "{} names an NVIDIA driver",
+                entry.vendor
+            );
+        }
+    }
+
+    #[test]
+    fn no_card_passes_off_its_loaded_module_as_a_package() {
+        // The module driving a device now is a fact about this machine, not a
+        // thing to install. HW-2 reads `driver` as a package name, and handing
+        // it something like `dxgkrnl` fails at the package manager. Tested both
+        // for a card with a row and for one without, since the two take
+        // different paths through resolve().
+        for vendor_id in ["1414", "dead"] {
+            let mut device = gpu("008e");
+            device.vendor_id = vendor_id.to_string();
+            device.kernel_driver = Some("dxgkrnl".to_string());
+            let resolution = database().resolve(&device);
+            assert_ne!(
+                resolution.driver, "dxgkrnl",
+                "{} offered its loaded module as a package",
+                vendor_id
+            );
+            // Still reported, as the fact about this machine that it is.
+            assert_eq!(resolution.kernel_driver_in_use.as_deref(), Some("dxgkrnl"));
+        }
     }
 
     #[test]

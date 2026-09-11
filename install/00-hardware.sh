@@ -278,8 +278,10 @@ print(' '.join(r[$index].get('kernel_parameters', [])) if len(r) > $index else '
     for candidate in $CHAIN; do
       LEVEL=$((LEVEL + 1))
       case "$candidate" in
-        nouveau|amdgpu|radeon|i915)
-          # In-tree. Nothing to install; it is already in the kernel.
+        nouveau|amdgpu|radeon|i915|virtio-gpu|bochs-drm|vmwgfx|vboxvideo|hyperv_drm|mgag200|ast)
+          # In-tree kernel drivers. There is no package to install, so asking
+          # the package manager for one would fail and log a failure for
+          # something that is not a failure. Only the userspace is needed.
           if install_package "mesa"; then
             SETTLED="$candidate (in-tree)"
             break

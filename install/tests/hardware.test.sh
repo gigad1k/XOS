@@ -11,7 +11,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SCRIPT="$HERE/../00-hardware.sh"
+INSTALL_DIR="$HERE/.."
+SCRIPT="$INSTALL_DIR/00-hardware.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -283,6 +284,17 @@ check "it falls back rather than failing" "no fallback recorded" \
   "$(grep -qE "display:.*-> vesa" "$LOG" && echo 0 || echo 1)"
 check "the module already driving it is not installed as a package" "weird_module was installed" \
   "$(grep -q "installing weird_module" "$LOG" && echo 1 || echo 0)"
+
+printf '\nIn-tree drivers are not looked for in the package manager\n'
+
+# There is no package called virtio-gpu. Asking for one fails, and the install
+# log then reports a failure for something that is not a failure and was never
+# going to be one.
+INTREE_CASE="$(grep -oE '^ +nouveau\|[a-z0-9|_-]+\)' "$INSTALL_DIR/00-hardware.sh" | head -1)"
+for driver in virtio-gpu bochs-drm vmwgfx vboxvideo hyperv_drm mgag200 ast; do
+  check "$driver is treated as in-tree" "the installer would try to install a kernel module" \
+    "$(printf '%s' "$INTREE_CASE" | grep -q -- "$driver" && echo 0 || echo 1)"
+done
 
 printf '\nHybrid graphics\n'
 

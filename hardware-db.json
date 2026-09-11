@@ -239,6 +239,167 @@
       "confidence": "known"
     },
     {
+      "id": "pci:1af4",
+      "class": "display",
+      "vendor": "Red Hat virtio",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "virtio-gpu",
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "virtio-gpu is in-tree and is what QEMU and KVM give a guest by default"
+    },
+    {
+      "id": "pci:1234",
+      "class": "display",
+      "vendor": "Bochs and QEMU standard VGA",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "bochs-drm",
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "the QEMU default when virtio is not selected; bochs-drm is in-tree"
+    },
+    {
+      "id": "pci:15ad",
+      "class": "display",
+      "vendor": "VMware",
+      "driver": "xf86-video-vmware",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "vmwgfx",
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "vmwgfx is in-tree; the X driver adds resolution changes with the window"
+    },
+    {
+      "id": "pci:80ee",
+      "class": "display",
+      "vendor": "Oracle VirtualBox",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "vboxvideo",
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "vboxvideo is in-tree; guest additions are only needed for shared folders"
+    },
+    {
+      "id": "pci:1414",
+      "class": "display",
+      "vendor": "Microsoft",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "hyperv_drm",
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "Hyper-V and WSL. On WSL the host owns the display and there is nothing to drive"
+    },
+    {
+      "id": "pci:102b",
+      "class": "display",
+      "vendor": "Matrox",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "mgag200",
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "the onboard chip in a great many old servers and workstations; mgag200 is in-tree"
+    },
+    {
+      "id": "pci:1a03",
+      "class": "display",
+      "vendor": "ASPEED",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "ast",
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "the BMC display on most server boards; ast is in-tree"
+    },
+    {
+      "id": "pci:1106",
+      "class": "display",
+      "vendor": "VIA",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "openchrome is long unmaintained, so modesetting is the honest answer"
+    },
+    {
+      "id": "pci:1039",
+      "class": "display",
+      "vendor": "Silicon Integrated Systems",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "no maintained driver remains; these boards run on the framebuffer"
+    },
+    {
+      "id": "pci:1013",
+      "class": "display",
+      "vendor": "Cirrus Logic",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "the cirrus kernel driver was removed in 5.x, so modesetting it is"
+    },
+    {
+      "id": "pci:5333",
+      "class": "display",
+      "vendor": "S3 Graphics",
+      "driver": "mesa",
+      "firmware": [],
+      "kernel_parameters": [],
+      "fallback": [
+        "modesetting",
+        "vesa"
+      ],
+      "confidence": "known",
+      "why": "older than anything with a maintained driver; the framebuffer works"
+    },
+    {
       "id": "pci:10ec",
       "class": "network",
       "vendor": "Realtek",
@@ -281,5 +442,17 @@
       ],
       "confidence": "known"
     }
-  ]
+  ],
+  "generic_display": {
+    "note": "What a display device gets when its vendor has no row. This is not a guess about the card, which the HW-2 guardrail forbids: it is the generic userspace over whatever in-tree driver the kernel already bound, then the generic modesetting X driver, then a plain framebuffer. One of those three puts a picture on any screen that can show one. A vendor gets its own row only when there is something specific worth saying.",
+    "driver": "mesa",
+    "firmware": [
+      "linux-firmware"
+    ],
+    "fallback": [
+      "modesetting",
+      "vesa"
+    ],
+    "confidence": "generic"
+  }
 }
