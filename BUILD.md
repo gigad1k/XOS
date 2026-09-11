@@ -18,7 +18,7 @@
 | 14 | P12 | Mission Control | done | |
 | 15 | HW-1 | Hardware detection | done | |
 | 16 | HW-2 | Driver resolution and installation | done | *GATE* |
-| 17 | P13 | Installer | in-progress | *GATE* |
+| 17 | P13 | Installer | done | *GATE* |
 | 18 | P14 | First-run experience and first goal | todo | |
 
 ## Status values
@@ -571,3 +571,132 @@ installation code and did not run it. No driver was installed, no package
 manager invoked, no kernel module loaded and no disk written on the machine this
 was built on. Everything was exercised against a temporary root with a stub
 package manager.
+
+### P13 - Installer
+
+- `install/` now holds `boot.sh`, `base.sh`, `install.sh`, `lib.sh`,
+  `packages.lock`, the numbered steps 01 to 09, and a harness of 91 tests
+  beside HW-2's 36.
+- Nothing Omarchy owns is modified. `layer_into` refuses to overwrite a file it
+  did not write; `include_once` adds exactly one idempotent `source =` line to
+  hyprland.conf and nothing else. Waybar has no include directive, so the XOS
+  bar lives in its own directory with a README saying how to use it, and
+  Omarchy's config is left byte-identical - which the harness checks by hashing
+  it before and after.
+- Every package is pinned in `packages.lock`, and `pin_install` refuses anything
+  not in it. A test walks every script, collects every package name, and fails
+  if one is unpinned.
+- The amendment is implemented. `base.sh` detects firmware and partitions
+  accordingly: GPT with an EFI system partition under UEFI, MBR with a BIOS boot
+  partition and GRUB to the MBR under legacy. That path is the reason XOS ships
+  its own base installer at all, since Omarchy's requires UEFI and would exclude
+  most pre-2012 machines.
+- `base.sh` is the only file in XOS that destroys data, and it behaves like it:
+  it prints the disk and its contents, says plainly that everything on it will
+  be destroyed, requires the disk name to be typed back, refuses outright when
+  nothing is attached to the prompt, and does nothing at all under `--dry-run`.
+  It also refuses to partition when it cannot tell UEFI from BIOS rather than
+  guessing, since guessing produces a machine that installs cleanly and then
+  does not boot.
+- LUKS is opt-in and AES-NI is detected. Without AES-NI the script says
+  plainly that encryption will make the machine noticeably slower and asks
+  again, because many target machines predate AES-NI and full-disk encryption on
+  them turns a slow machine into an unusable one.
+- Socket activation, which is the architecturally significant part: Open WebUI,
+  SearXNG and the OpenClaw gateway are each a socket unit, a
+  `systemd-socket-proxyd` with `--exit-idle-time=15min`, and the real daemon
+  behind it with `StopWhenUnneeded=yes`. The sockets hold the ports from boot at
+  no cost; the services exist only between the first connection and fifteen idle
+  minutes later. Only xosd and llama-server are started at boot. The exception is
+  implemented and commented: with messaging configured the OpenClaw gateway is
+  enabled at boot, because an inbound message cannot socket-activate a listener
+  that is not listening.
+- `09-xosd.sh` stands alone. Run by itself on an existing Arch or Debian box,
+  with no other XOS file present, it defines its own helpers, detects the
+  package manager, builds, installs and enables the unit. A test copies it
+  somewhere with no `lib.sh` beside it and runs it.
+- Reading the actual install log, rather than trusting the harness, found seven
+  defects. Four of them mattered:
+  1. **A real install would have installed nothing and reported success.**
+     `install.sh` passed `${XOS_DRY_RUN:+--dry-run}` to every step, and `:+`
+     expands whenever the variable is non-empty - which "0" is. Every step was
+     always told to do nothing. The log read perfectly, and somebody would have
+     found out at the reboot. It now tests the value, and there is a test that a
+     run without `--dry-run` actually installs something.
+  2. **`09-xosd.sh` ran the host's real `apt-get` during a test.** It hardcoded
+     the package manager instead of honouring `XOS_PACKAGE_MANAGER`, so it
+     reached straight past the substitution. It failed only because the tests
+     were not run as root. It now uses whatever was substituted, and the harness
+     stubs pacman, apt-get, apt, dpkg, pacstrap and arch-chroot as well, because
+     a test suite must not be able to install packages on the machine running it.
+  3. **`09-xosd.sh` announced "xosd is installed" directly after two failures to
+     install it.** The same defect as HW-2's bluetooth line and P7's audit log,
+     in a place somebody acts on. It now says what happened and exits non-zero.
+  4. **Every memory threshold excluded the machine it was written for.** A
+     machine sold as 8GB reports around 7800 MB, because firmware and an
+     integrated GPU take their cut before Linux sees any of it, so
+     `minimum_memory_mb: 8192` matched no 8GB machine at all - and the spec says
+     in as many words that XOS targets 8GB machines. Every threshold in
+     verified-models.json is now written against what a machine reports rather
+     than what it was sold as, and a test fails any threshold that is a round
+     power of two.
+  The other three: `07-models.sh` reported "nothing fits" when it had simply not
+  been able to read the hardware report, which is a different fact and a
+  discouraging thing to tell somebody untruthfully; the socket units carried a
+  `BindIPv6Only` line that does nothing on an IPv4 literal and implied a
+  protection it was not providing; and a dropped `fi` from an earlier edit.
+- **`verified-models.json` was created here, and no prompt owns it.** HW-1's
+  prompt refers to it as an existing thing to copy the shape of, and P13's
+  07-models.sh reads it, but nothing creates it. Recorded per driver.txt as an
+  ambiguity resolved: P13 ships it, because a step that reads a file nobody
+  creates is the same broken promise HW-2 had. Gemma 4 E4B is rank 1 and the only
+  `confirmed` row, matching the spec.
+- Verification limits, plainly. The check P13 asks for is a clean Arch VM, and
+  there is not one here. Nothing was installed, no disk was partitioned, no
+  bootloader written and no machine rebooted. Everything was run against a
+  temporary root with the package manager and every external command stubbed.
+  So: every script parses and runs, the ordering is right, the layering is
+  right, the units say what they should, and whether the resulting machine
+  actually boots into a working desktop is exactly what has not been shown.
+
+#### A defect in HW-1, recorded rather than fixed
+
+`MIN_CPU_MEMORY_MB` in `xosd/src/hardware/mod.rs` is 8192, and a machine sold
+as 8GB reports around 7800. A machine with 8GB and no usable GPU is therefore
+reported as `api-only` when it should be `cpu`, so XOS would tell the owner of
+its own headline target machine that it cannot run a local model. It is the same
+mistake as the model thresholds, in the task next door. `MIN_LOCAL_VRAM_MB` at
+4096 is on the same edge for a 4GB card.
+
+driver.txt says not to edit a file belonging to a completed task, and to write
+it in Notes instead, so that is what this is. It is a two-constant change and
+worth making before P14.
+
+#### Gate review - P13
+
+What a human should verify, and why:
+
+1. **A clean Arch VM, which is the actual check.** Run `base.sh --dry-run`
+   first, then for real on a disk that can be lost, then `install.sh`, then
+   reboot. Everything below this line has been tested; this has not.
+2. **Both firmware paths on real hardware.** The UEFI path and the legacy BIOS
+   path produce different partition tables and different bootloader installs,
+   and the BIOS path is the reason this file exists. Neither has booted a real
+   machine.
+3. **The pinned versions.** `packages.lock` holds versions that were current for
+   Arch when it was written. Arch moves. A stale pin degrades the install rather
+   than breaking it, since `pin_install` reports what it could not get and
+   carries on, but somebody should refresh them against a current mirror.
+4. **The socket activation, under load.** Fifteen minutes of idle before a
+   service stops is a guess about how people use Open WebUI. Worth watching on a
+   real 8GB machine before anyone trusts the number.
+5. **`https://xos.sh/boot` and the repository URL in boot.sh** are placeholders
+   pointing at this repository. Neither is real yet.
+6. **The bundled DKMS sources HW-2 expects at
+   `/run/archiso/bootmnt/xos/dkms`.** Still nothing puts them there. That is an
+   ISO-building job, which no prompt in this build covers, and without it the
+   unsupported-wifi fallback in HW-2 has nothing to try.
+
+Deliberate scope decision, again recorded: this task wrote the installer and did
+not run it. No disk was partitioned, no bootloader written, no package installed
+and no service enabled on the machine this was built on.
