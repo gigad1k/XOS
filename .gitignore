@@ -1,0 +1,7 @@
+target/
+*.gguf
+*.db
+config/openclaw/config.json
+.env
+*.key
+*.pem

@@ -2,7 +2,7 @@
 
 | # | ID | Task | Status | Gate |
 |---|---|---|---|---|
-| 1 | P0 | Repository scaffold | in-progress | |
+| 1 | P0 | Repository scaffold | blocked | |
 | 2 | P1 | XOS Bench — tool-call harness | todo | *GATE* |
 | 3 | P2 | xosd skeleton, provider trait, halt primitive | todo | |
 | 4 | P3 | xos chat TUI | todo | |
@@ -32,3 +32,19 @@ real disks.
 
 ## Notes
 (append findings, deviations and blockers here as the build proceeds)
+
+- P0 — blocked on toolchain, not on code. The scaffold is complete: workspace,
+  three crates, nine `xosd` subsystem modules, `.gitignore`, README hardware
+  table, MIT LICENSE. The check could not run because no Rust toolchain exists
+  on this machine — `cargo` and `rustc` are absent from Windows (PATH,
+  `~/.cargo`, Program Files, Chocolatey) and from WSL Ubuntu-24.04. Retrying
+  cannot fix a missing compiler. `cargo build`, `cargo run --bin xos` and
+  `cargo test` are unrun, not passed. Installing one is an operator decision:
+  Windows needs the MSVC build tools, WSL needs only rustup (`cc` is already
+  there), and WSL is the closer match to the Arch target.
+- P0 decisions later tasks depend on: edition 2021 with `resolver = "2"`; crate
+  metadata inherits from `[workspace.package]`; the `xos` binary name comes from
+  an explicit `[[bin]]` in `xos-cli`, so `cargo run --bin xos` resolves without
+  `-p`; subsystem modules are `src/<name>/mod.rs` directories, so files can be
+  added without moving anything.
+- LICENSE holder is "XOS contributors", a placeholder. Set a real name if wanted.
