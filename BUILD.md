@@ -7,7 +7,7 @@
 | 3 | P2 | xosd skeleton, provider trait, halt primitive | done | |
 | 4 | P3 | xos chat TUI | done | |
 | 5 | P4 | XOS Vault and cloud providers | done | |
-| 6 | P5 | Router and escalation log | todo | *GATE* |
+| 6 | P5 | Router and escalation log | in-progress | *GATE* |
 | 7 | P6 | XOS Memory, export and import | todo | |
 | 8 | P7 | Policy engine and egress protection | todo | *GATE* |
 | 9 | P7b | Action journal and undo | todo | *GATE* |
