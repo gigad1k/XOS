@@ -70,4 +70,8 @@ virtual machine first.
 ## The manual
 
 [docs/manual.md](docs/manual.md) — installing, running, supervising and stopping XOS.
-Every command in it is checked against the binary by `docs/manual.test.sh`.
+
+[docs/headless.md](docs/headless.md) — running it with no desktop: a box on your
+network with a local model, reached over SSH.
+
+Every command in both is checked against the binary by `docs/manual.test.sh`.

@@ -97,5 +97,18 @@ for word in aggressive-local balanced best-quality; do
 done
 
 echo
+echo "Commands the headless manual names"
+for pair in "goal:advance" "memory:search" "policy:log" "pulse:status" "vault:add"; do
+  shape "xos ${pair%%:*} ${pair##*:}" "${pair%%:*}" "${pair##*:}"
+done
+for f in halt resume status chat setup export import journal undo hardware; do
+  shape "xos $f" "$f"
+done
+grep -q 'loginctl enable-linger' "$HERE/headless.md" && ok "lingering is documented" || bad "lingering" "not mentioned"
+grep -q 'journalctl --user -u xosd' "$HERE/headless.md" && ok "the daemon log is named" || bad "journalctl" "not mentioned"
+grep -q 'install.sh --only' "$HERE/headless.md" && ok "--only is documented" || bad "--only" "not mentioned"
+grep -q -- '--only' "$HERE/../install/install.sh" && ok "--only exists" || bad "--only" "install.sh does not offer it"
+
+echo
 [ "$FAIL" = "0" ] && echo "Every command in the manual exists." || echo "THE MANUAL IS WRONG SOMEWHERE."
 exit "$FAIL"

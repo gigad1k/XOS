@@ -64,18 +64,26 @@ runs — either slowly on the CPU, or through an API.
 
 ### With the XOS medium
 
-Write the ISO to a USB stick, boot it, and type one thing:
-
-```
-install-xos
-```
-
-That is the whole installation. It works out what hardware is here, shows you
-the disks, asks which one, asks about encryption and a name, and then partitions,
+Write the ISO to a USB stick, put it in the machine, and turn it on. **The
+installer starts by itself.** It works out what hardware is here, shows you the
+disks, asks which one, asks about encryption and a name, then partitions,
 installs Arch, applies the XOS layer and offers to reboot.
 
-`install-xos --dry-run` walks the entire thing and writes nothing, which is worth
-doing once before the real run.
+Nothing is erased until you have seen the disk and typed its name back.
+
+If you leave the installer, or it finishes, you get a shell. From there
+`install-xos` starts it again, and `install-xos --dry-run` walks the whole thing
+writing nothing — worth doing once before the real run.
+
+#### Installing without being asked anything
+
+The boot menu has a second entry: **Install XOS automatically (erases the
+largest disk)**. It does exactly that — picks the largest disk in the machine,
+erases it, and installs without another question.
+
+It counts down for twenty seconds first, and `Ctrl+C` stops it. It is never the
+entry you land on by pressing Enter, because a USB stick left in the wrong
+machine should not cost somebody a disk.
 
 ### Building the medium
 
@@ -156,6 +164,12 @@ is not an edge case for XOS, it is the target.
 
 If XOS cannot tell which firmware you have, it stops rather than guessing. A
 guess produces a machine that installs perfectly and then does not boot.
+
+### With no desktop at all
+
+XOS runs headless: the daemon, a local model, and nothing that draws a window.
+For a box in a cupboard that answers over SSH, see
+[the headless manual](headless.md).
 
 ### Just the daemon, on a machine you already have
 

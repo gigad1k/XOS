@@ -1,20 +1,17 @@
 
   XOS install medium
 
-  To install XOS on this machine, type:
+  The installer starts by itself in a moment. Nothing is erased until you
+  have seen the disk and typed its name back.
 
-      install-xos
+  If you leave it, or it finishes, you get a shell. From there:
 
-  It works out what hardware is here, asks which disk to use, and does the
-  rest. Nothing is erased until you have seen the disk and typed its name
-  back.
-
-  Other things worth knowing:
-
+      install-xos               start it again
       install-xos --dry-run     every question, nothing written
       xos hardware              what is in this machine, and what it needs
       iwctl                     connect to wifi
       ip a                      check the network
 
-  There is a full manual at /root/xos/docs/manual.md.
+  There is a full manual at /root/xos/docs/manual.md, and one for running
+  XOS with no desktop at /root/xos/docs/headless.md.
 

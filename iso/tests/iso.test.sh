@@ -204,6 +204,11 @@ for script in $NEEDS_MODE; do
 done
 check "every script on PATH is made executable" "would ship 644 and refuse to run:$UNLISTED"   "$([ -z "$UNLISTED" ] && echo 0 || echo 1)"
 
+ZLOGIN_WITHOUT_ZSH=0
+[ -f "$ISO/airootfs/root/.zlogin" ] && ! grep -qx 'zsh' "$ISO/packages.x86_64" && ZLOGIN_WITHOUT_ZSH=1
+check "no login file is written for a shell the medium does not carry" "a .zlogin without zsh never runs" \
+  "$ZLOGIN_WITHOUT_ZSH"
+
 check "somebody can reach a shell to type it" "the root account would be locked"   "$([ -f "$ISO/airootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf" ] && echo 0 || echo 1)"
 
 # The installer is reached through bash, so it never depends on a mode that
@@ -254,8 +259,24 @@ check "it points at the installer the repo actually has" "wrong path" \
   "$(grep -q 'install/live.sh' "$ISO/airootfs/usr/local/bin/install-xos" && echo 0 || echo 1)"
 check "live.sh is in the repo" "the medium would point at nothing" \
   "$([ -f "$REPO/install/live.sh" ] && echo 0 || echo 1)"
-check "nothing starts erasing disks on login" "a machine left on a USB stick would install itself" \
-  "$(grep -qE '^\s*(exec\s+)?(/root/)?install-xos|live\.sh' "$ISO/airootfs/root/.zlogin" && echo 1 || echo 0)"
+# The medium starts the installer by itself, so nobody has to be told a
+# command. What it must never do is erase a disk without being asked, and that
+# is a different property: the unattended path exists, it is reachable only
+# from a boot menu entry that says what it does, and it counts down first.
+LOGIN_FILE="$ISO/airootfs/root/.bash_profile"
+
+check "the medium starts the installer by itself" "somebody would have to know a command to type" \
+  "$(grep -q 'install-xos' "$LOGIN_FILE" && echo 0 || echo 1)"
+check "the login file is one the shell on the medium actually reads" "it would never run" \
+  "$([ -f "$ISO/airootfs/root/.bash_profile" ] && echo 0 || echo 1)"
+check "an unattended install is only reached deliberately" "a forgotten USB stick would erase the machine" \
+  "$(grep -q 'xos.auto' "$LOGIN_FILE" && echo 0 || echo 1)"
+check "the unattended entry says it erases the disk" "it would not be an informed choice" \
+  "$(grep -qi 'erase' "$ISO/syslinux/archiso_sys.cfg" && echo 0 || echo 1)"
+check "the unattended path counts down before it starts" "no chance to stop it" \
+  "$(grep -q 'Ctrl+C now' "$REPO/install/live.sh" && echo 0 || echo 1)"
+check "the default path still asks which disk" "it would pick one on its own" \
+  "$(grep -q 'Which disk?' "$REPO/install/live.sh" && echo 0 || echo 1)"
 
 # ---------------------------------------------------------------- the build
 

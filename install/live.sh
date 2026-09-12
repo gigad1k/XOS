@@ -35,6 +35,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISK=""
 ENCRYPT=0
 ASSUME_YES=0
+AUTO=0
 HOSTNAME_WANTED="xos"
 REBOOT=1
 
@@ -44,6 +45,7 @@ while [ "$#" -gt 0 ]; do
     --encrypt) ENCRYPT=1; shift ;;
     --hostname) HOSTNAME_WANTED="${2:-xos}"; shift 2 ;;
     --yes) ASSUME_YES=1; shift ;;
+    --auto) AUTO=1; ASSUME_YES=1; shift ;;
     --no-reboot) REBOOT=0; shift ;;
     --dry-run) XOS_DRY_RUN=1; export XOS_DRY_RUN; shift ;;
     *) shift ;;
@@ -89,7 +91,28 @@ BANNER
 
 [ "${XOS_DRY_RUN:-0}" = "1" ] && echo "  Dry run: every question, no writes." && echo
 
-if [ "$INTERACTIVE" = "1" ] && [ "$ASSUME_YES" != "1" ]; then
+# The unattended path. Chosen from the boot menu by somebody who read an entry
+# that says it erases the whole disk, never arrived at by default — but once
+# chosen, it still counts down in front of whoever is standing there, because
+# the wrong USB stick left in the wrong machine is a real way to lose a disk.
+if [ "$AUTO" = "1" ] && [ "${XOS_DRY_RUN:-0}" != "1" ]; then
+  echo
+  echo "  UNATTENDED INSTALL"
+  echo
+  echo "  This will pick the largest disk in this machine, erase it completely,"
+  echo "  and install XOS on it without asking anything else."
+  echo
+  echo "  If that is not what you want, press Ctrl+C now."
+  echo
+  countdown=20
+  while [ "$countdown" -gt 0 ]; do
+    printf '\r  Starting in %2d seconds...  ' "$countdown"
+    sleep 1
+    countdown=$((countdown - 1))
+  done
+  printf '\r  Starting.                   \n'
+  echo
+elif [ "$INTERACTIVE" = "1" ] && [ "$ASSUME_YES" != "1" ]; then
   if ! ask_yes_no "Go on?" 1; then
     echo
     echo "  Nothing has been changed."
@@ -210,6 +233,19 @@ fi
 echo
 echo "$DISKS" | nl -w4 -s'  ' | sed 's/^/  /'
 echo
+
+if [ -z "$DISK" ] && [ "$AUTO" = "1" ]; then
+  # Largest wins. On a machine with one disk this is that disk; on a machine
+  # with several it is the one somebody most likely meant, and the countdown
+  # above named this behaviour before it happened.
+  DISK="$(printf '%s\n' "$DISKS" | sort -k2 -h -r | head -1 | awk '{print $1}')"
+  if [ -z "$DISK" ]; then
+    xwarn "no disk here is big enough to install onto"
+    xlog "   nothing has been changed"
+    exit 1
+  fi
+  xlog "   choosing $DISK, the largest disk in this machine"
+fi
 
 if [ -z "$DISK" ]; then
   if [ "$INTERACTIVE" = "0" ]; then

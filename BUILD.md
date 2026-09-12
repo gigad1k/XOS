@@ -945,3 +945,28 @@ carried on writing to the live filesystem.
 - The bundled wifi drivers have never been built: that step reaches the AUR,
   and a network failure there would say nothing about the profile.
 - No physical machine has run any of this. Everything above is QEMU.
+
+### Booting straight into the installer, and a headless manual
+
+- The medium now starts the installer by itself. Somebody who put a stick in a
+  machine to install XOS should not then have to be told a command to type.
+- **The login file never ran.** It was `.zlogin`, which is zsh, and there is no
+  zsh on the medium — root's shell is bash. The motd that appeared on screen was
+  pam_motd doing it, not the profile. Renamed to `.bash_profile`, and there is a
+  test now that fails a login file written for a shell the medium does not carry.
+- The destructive step is still asked for. The default entry starts the
+  installer and the installer still shows the disk and waits for its name to be
+  typed back.
+- Unattended installs exist and are chosen: a third boot menu entry on both
+  firmwares, labelled "Install XOS automatically (erases the largest disk)",
+  passing `xos.auto` on the kernel command line. It counts down for twenty
+  seconds in front of whoever is standing there, and Ctrl+C stops it. Sorted
+  last on UEFI so it is never what pressing Enter lands on.
+- Both paths were verified by booting: touching nothing reaches the installer's
+  first question, and choosing the unattended entry reaches the countdown with
+  the disk already chosen.
+- `docs/headless.md` covers running XOS with no desktop — the daemon and a local
+  model on a box reached over SSH, Mission Control and llama-server forwarded
+  rather than exposed, what is resident and what it costs, and the fact that the
+  kill switch is a keybinding that does nothing over SSH so the command matters.
+  `docs/manual.test.sh` checks its commands too.
