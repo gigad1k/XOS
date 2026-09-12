@@ -53,21 +53,35 @@ printf '\nIt boots on UEFI and on legacy BIOS\n'
 
 # The entire reason this profile exists rather than a line in the manual
 # telling people to use the Arch ISO.
+#
+# Read from the array rather than by grepping the file. A comment that merely
+# mentions a boot mode is not a boot mode, and a check that cannot tell the
+# difference passes while the profile says something else.
+BOOTMODES="$(sed -n '/^bootmodes=(/,/^)/p' "$ISO/profiledef.sh" | grep -oE "'[a-z0-9._-]+'" | tr -d "'")"
+
+check "the profile declares boot modes at all" "mkarchiso would have nothing to build" \
+  "$([ -n "$BOOTMODES" ] && echo 0 || echo 1)"
 check "legacy BIOS is a boot mode" "pre-2012 machines could not boot it" \
-  "$(grep -q 'bios.syslinux' "$ISO/profiledef.sh" && echo 0 || echo 1)"
+  "$(printf '%s\n' "$BOOTMODES" | grep -q '^bios\.' && echo 0 || echo 1)"
 check "UEFI is a boot mode" "modern machines could not boot it" \
-  "$(grep -q 'uefi-x64' "$ISO/profiledef.sh" && echo 0 || echo 1)"
+  "$(printf '%s\n' "$BOOTMODES" | grep -q '^uefi' && echo 0 || echo 1)"
+
+# archiso accepts the older per-medium spellings and warns four times while
+# rewriting them to exactly what is written here now.
+DEPRECATED="$(printf '%s\n' "$BOOTMODES" | grep -E '\.(mbr|eltorito|esp)$|^uefi-(x64|ia32)\.' || true)"
+check "no boot mode uses a deprecated spelling" "archiso warns: $DEPRECATED" \
+  "$([ -z "$DEPRECATED" ] && echo 0 || echo 1)"
 
 # A bootmode with no configuration behind it fails at build time.
-if grep -q 'bios.syslinux' "$ISO/profiledef.sh"; then
+if printf '%s\n' "$BOOTMODES" | grep -q '^bios\.'; then
   check "syslinux has a configuration" "the BIOS bootmode has nothing behind it" \
     "$([ -f "$ISO/syslinux/syslinux.cfg" ] && echo 0 || echo 1)"
-  for part in archiso_head.cfg archiso_sys.cfg archiso_tail.cfg archiso_pxe.cfg; do
+  for part in archiso_head.cfg archiso_sys.cfg archiso_tail.cfg; do
     check "syslinux/$part is there" "syslinux.cfg includes it" \
       "$([ -f "$ISO/syslinux/$part" ] && echo 0 || echo 1)"
   done
 fi
-if grep -q 'systemd-boot' "$ISO/profiledef.sh"; then
+if printf '%s\n' "$BOOTMODES" | grep -q 'systemd-boot'; then
   check "systemd-boot has a loader.conf" "the UEFI bootmode has nothing behind it" \
     "$([ -f "$ISO/efiboot/loader/loader.conf" ] && echo 0 || echo 1)"
   check "systemd-boot has at least one entry" "it would boot to an empty menu" \
@@ -85,6 +99,55 @@ done
 check "every syslinux include exists" "missing:$MISSING_INCLUDES" \
   "$([ -z "$MISSING_INCLUDES" ] && echo 0 || echo 1)"
 
+# ---------------------------------------------------------------- resolution
+#
+# Every one of these was written wrong, the profile built cleanly, 73 tests
+# passed, and the machine stopped at a bare boot: prompt. ISOLINUX resolves a
+# relative path against the directory holding isolinux.bin, which archiso puts
+# at /boot/syslinux — so "boot/syslinux/whichsys.c32" asks for
+# /boot/syslinux/boot/syslinux/whichsys.c32 and finds nothing.
+
+printf '\nsyslinux paths resolve where syslinux looks\n'
+
+PREFIXED="$(grep -hnE '^[[:space:]]*(COM32|CONFIG|INCLUDE|UI|MENU BACKGROUND)[[:space:]]+boot/' \
+  "$ISO"/syslinux/*.cfg 2>/dev/null || true)"
+check "no module or config is named with a directory prefix" "would resolve under /boot/syslinux/: $PREFIXED" \
+  "$([ -z "$PREFIXED" ] && echo 0 || echo 1)"
+
+# The kernel is the exception that proves it: it lives outside that directory,
+# so it needs a leading slash and the install directory.
+BAD_LINUX="$(grep -hnE '^[[:space:]]*(LINUX|INITRD)[[:space:]]+[^/]' "$ISO"/syslinux/*.cfg 2>/dev/null || true)"
+check "every kernel and initramfs path is absolute" "relative, so it resolves under /boot/syslinux/: $BAD_LINUX" \
+  "$([ -z "$BAD_LINUX" ] && echo 0 || echo 1)"
+check "the kernel path uses the install directory placeholder" "it would point outside the medium" \
+  "$(grep -q 'LINUX /%INSTALL_DIR%/' "$ISO/syslinux/archiso_sys.cfg" && echo 0 || echo 1)"
+
+# Every file the menu names has to travel with it.
+MISSING_ASSETS=""
+for asset in $(grep -hoE '^[[:space:]]*(UI|MENU BACKGROUND)[[:space:]]+\S+' "$ISO"/syslinux/*.cfg \
+               | awk '{print $NF}' | sort -u); do
+  case "$asset" in
+    *.c32) continue ;;   # archiso copies every .c32 from the syslinux package
+  esac
+  [ -f "$ISO/syslinux/$asset" ] || MISSING_ASSETS="$MISSING_ASSETS $asset"
+done
+check "every asset the menu names is in the profile" "missing:$MISSING_ASSETS" \
+  "$([ -z "$MISSING_ASSETS" ] && echo 0 || echo 1)"
+
+# A menu with no default waits for a keypress that never comes on a machine
+# left to install itself.
+check "the BIOS menu has a default entry" "it would wait forever" \
+  "$(grep -qE '^DEFAULT ' "$ISO/syslinux/archiso_sys.cfg" && echo 0 || echo 1)"
+check "the BIOS menu has a timeout" "it would wait forever" \
+  "$(grep -qE '^TIMEOUT ' "$ISO/syslinux/archiso_sys.cfg" && echo 0 || echo 1)"
+
+# Both firmwares should find the medium the same way. Two answers to one
+# question is one too many, and label matching can pick the wrong disk.
+check "BIOS finds the medium by UUID" "a colliding label could select the wrong disk" \
+  "$(grep -q 'archisosearchuuid=%ARCHISO_UUID%' "$ISO/syslinux/archiso_sys.cfg" && echo 0 || echo 1)"
+check "UEFI finds the medium the same way" "the two firmwares would disagree" \
+  "$(grep -rq 'archisosearchuuid=%ARCHISO_UUID%' "$ISO/efiboot/loader/entries/" && echo 0 || echo 1)"
+
 # Boot entries must name the kernel by the path archiso actually produces.
 BAD_KERNEL=""
 for entry in "$ISO"/efiboot/loader/entries/*.conf "$ISO"/syslinux/archiso_sys.cfg; do
@@ -101,6 +164,51 @@ check "a basic-graphics entry is offered on UEFI" "a black screen would end the 
   "$(grep -rqi 'nomodeset' "$ISO/efiboot/loader/entries/" && echo 0 || echo 1)"
 check "a basic-graphics entry is offered on BIOS" "a black screen would end the install" \
   "$(grep -qi 'nomodeset' "$ISO/syslinux/archiso_sys.cfg" && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------- the boot
+#
+# Every one of these was wrong at once, the image built, 81 tests passed, and
+# the machine reached an emergency shell with the root account locked. A
+# bootloader menu proves the bootloader; it proves nothing about the boot.
+
+printf '
+The initramfs can find the medium
+'
+
+ARCHISO_CONF="$ISO/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
+PRESET="$ISO/airootfs/etc/mkinitcpio.d/linux.preset"
+
+check "the profile configures the archiso hooks" "the initramfs gets the stock hooks and cannot mount the medium"   "$([ -f "$ARCHISO_CONF" ] && echo 0 || echo 1)"
+check "the archiso hook is among them" "switch root fails and it drops to emergency mode"   "$(grep -qE '^HOOKS=\(.*[( ]archiso[ )]' "$ARCHISO_CONF" 2>/dev/null && echo 0 || echo 1)"
+check "autodetect is not among them" "it would probe the build machine, not the target"   "$(grep -qE '^HOOKS=\(.*[( ]autodetect[ )]' "$ARCHISO_CONF" 2>/dev/null && echo 1 || echo 0)"
+check "a preset names the image the boot entries load" "the bootloader would point at nothing"   "$(grep -q 'initramfs-linux.img' "$PRESET" 2>/dev/null && echo 0 || echo 1)"
+
+# Every PXE hook needs a package, and missing one stops mkinitcpio dead.
+HOOK_PKGS=""
+grep -qE 'archiso_pxe_(common|nfs)' "$ARCHISO_CONF" 2>/dev/null &&
+  { grep -qx 'mkinitcpio-nfs-utils' "$ISO/packages.x86_64" || HOOK_PKGS="$HOOK_PKGS mkinitcpio-nfs-utils"; }
+grep -q 'archiso_pxe_nbd' "$ARCHISO_CONF" 2>/dev/null &&
+  { grep -qx 'nbd' "$ISO/packages.x86_64" || HOOK_PKGS="$HOOK_PKGS nbd"; }
+check "every hook has the package it needs" "mkinitcpio would fail on:$HOOK_PKGS"   "$([ -z "$HOOK_PKGS" ] && echo 0 || echo 1)"
+
+printf '
+Somebody can actually use the medium
+'
+
+# mkarchiso discards airootfs modes. Anything that must be executable has to be
+# named in file_permissions, or it ships 644 and cannot run.
+NEEDS_MODE="$(grep -lE '^#!' "$ISO"/airootfs/usr/local/bin/* 2>/dev/null | xargs -rn1 basename)"
+UNLISTED=""
+for script in $NEEDS_MODE; do
+  grep -q "\[\"/usr/local/bin/$script\"\]" "$ISO/profiledef.sh" || UNLISTED="$UNLISTED $script"
+done
+check "every script on PATH is made executable" "would ship 644 and refuse to run:$UNLISTED"   "$([ -z "$UNLISTED" ] && echo 0 || echo 1)"
+
+check "somebody can reach a shell to type it" "the root account would be locked"   "$([ -f "$ISO/airootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf" ] && echo 0 || echo 1)"
+
+# The installer is reached through bash, so it never depends on a mode that
+# mkarchiso throws away.
+check "the launcher does not depend on a discarded mode" "live.sh ships 644 and exec would fail"   "$(grep -q 'exec bash' "$ISO/airootfs/usr/local/bin/install-xos" && echo 0 || echo 1)"
 
 # ---------------------------------------------------------------- packages
 

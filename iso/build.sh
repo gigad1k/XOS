@@ -125,13 +125,29 @@ step "Putting XOS on the medium"
 SOURCE="$PROFILE/airootfs/root/xos"
 mkdir -p "$SOURCE"
 # The working tree as committed, so the medium carries no build output and no
-# half-finished edit.
-if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
-  git -C "$REPO" archive --format=tar HEAD | tar -x -C "$SOURCE"
+# half-finished edit. tar rather than rsync for the fallback: rsync is not
+# installed everywhere, and when it was missing this printed "command not
+# found", said the source had been copied, and built a medium with no XOS on it.
+if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 &&
+   git -C "$REPO" archive --format=tar HEAD 2>/dev/null | tar -x -C "$SOURCE" 2>/dev/null; then
   say "   source from git HEAD: $(git -C "$REPO" rev-parse --short HEAD)"
 else
-  rsync -a --exclude target --exclude .git "$REPO/" "$SOURCE/"
+  tar -C "$REPO" --exclude=./target --exclude=./out --exclude=./.git -cf - . \
+    | tar -C "$SOURCE" -xf - || {
+      warn "could not copy the XOS source onto the medium"
+      say  "   the medium would boot and have nothing to install with, so this stops here"
+      exit 1
+    }
   say "   source copied from the working tree"
+fi
+
+# The one thing the medium exists to carry. Checked rather than assumed,
+# because the failure above was silent and produced an installer-shaped ISO
+# with no installer in it.
+if [ ! -f "$SOURCE/install/live.sh" ]; then
+  warn "the XOS source did not land on the medium"
+  say  "   $SOURCE/install/live.sh is missing, so there would be nothing to run"
+  exit 1
 fi
 chmod +x "$SOURCE"/install/*.sh 2>/dev/null
 
@@ -165,28 +181,63 @@ if [ "$SKIP_DKMS" = "0" ]; then
   say "   These cannot be fetched during an install: getting them from the AUR"
   say "   needs the internet that they exist to provide."
 
-  BUILDER="${SUDO_USER:-nobody}"
   BUILD_ROOT="$WORK/dkms"
   rm -rf "$BUILD_ROOT"; mkdir -p "$BUILD_ROOT"
-  chown "$BUILDER" "$BUILD_ROOT" 2>/dev/null
+
+  # makepkg refuses to run as root, correctly, so it needs a real unprivileged
+  # user with a writable home. `nobody` is not one: its home is / and nothing
+  # it does can write there, so makepkg fails before it starts. Whoever ran
+  # sudo is the natural choice; when there is no such person, one is made for
+  # the job and removed afterwards.
+  BUILDER="${SUDO_USER:-}"
+  MADE_BUILDER=0
+  if [ -z "$BUILDER" ] || [ "$BUILDER" = "root" ] || ! id -u "$BUILDER" >/dev/null 2>&1; then
+    BUILDER=xos-build
+    if ! id -u "$BUILDER" >/dev/null 2>&1; then
+      useradd --system --create-home --home-dir "$BUILD_ROOT/home" \
+              --shell /bin/bash "$BUILDER" 2>/dev/null
+      MADE_BUILDER=1
+    fi
+  fi
+  say "   building as $BUILDER"
+  mkdir -p "$BUILD_ROOT/home"
+  chown -R "$BUILDER" "$BUILD_ROOT" 2>/dev/null
+
+  # The dependencies, installed here as root. `makepkg -s` would install them
+  # itself by calling pacman through sudo, which an unprivileged builder cannot
+  # do without a sudoers rule this script has no business writing.
+  pacman -S --noconfirm --needed dkms git >> /dev/null 2>&1 || \
+    warn "   could not install dkms; the driver packages may not build"
 
   BUILT=0
   for package in "${DKMS_PACKAGES[@]}"; do
     say ""
     say "   $package"
-    if ! sudo -u "$BUILDER" git clone --depth 1 \
+    if ! sudo -u "$BUILDER" -H git clone --depth 1 \
            "https://aur.archlinux.org/$package.git" "$BUILD_ROOT/$package" >/dev/null 2>&1; then
       warn "   could not fetch $package; skipping it"
       continue
     fi
-    # makepkg refuses to run as root, correctly.
-    if ( cd "$BUILD_ROOT/$package" && sudo -u "$BUILDER" makepkg -s --noconfirm --needed ) >/dev/null 2>&1; then
-      cp "$BUILD_ROOT/$package"/*.pkg.tar.zst "$DKMS_DIR/" 2>/dev/null && BUILT=$((BUILT + 1))
-      say "   built"
+    chown -R "$BUILDER" "$BUILD_ROOT/$package" 2>/dev/null
+    # No -s: the dependencies are already in. -H so makepkg gets the builder's
+    # own home rather than root's.
+    if ( cd "$BUILD_ROOT/$package" &&
+         sudo -u "$BUILDER" -H makepkg --noconfirm --nocheck ) > "$BUILD_ROOT/$package.log" 2>&1; then
+      if cp "$BUILD_ROOT/$package"/*.pkg.tar.zst "$DKMS_DIR/" 2>/dev/null; then
+        BUILT=$((BUILT + 1))
+        say "   built"
+      else
+        warn "   $package built and produced no package file"
+      fi
     else
-      warn "   $package did not build; skipping it"
+      # The reason, not just the fact. Hunting it down afterwards means
+      # rebuilding an ISO to find out.
+      warn "   $package did not build:"
+      tail -3 "$BUILD_ROOT/$package.log" 2>/dev/null | sed 's/^/       /'
     fi
   done
+
+  [ "$MADE_BUILDER" = "1" ] && userdel "$BUILDER" 2>/dev/null
 
   say ""
   if [ "$BUILT" = "0" ]; then
@@ -216,14 +267,28 @@ NOTE
 step "Building the image"
 say "   this takes a while and needs a few gigabytes of space"
 
+# Cleared first. mkarchiso marks each step it finishes inside the work
+# directory and skips those steps on a later run, so building twice into the
+# same one does nothing whatsoever and still reports success — which is a
+# miserable thing to discover while trying to fix something.
+rm -rf "$WORK/mkarchiso"
+
 if mkarchiso -v -w "$WORK/mkarchiso" -o "$OUT" "$PROFILE"; then
+  # Success is an image on disk, not a zero exit status.
+  IMAGE="$(ls -t "$OUT"/*.iso 2>/dev/null | head -1)"
+  if [ -z "$IMAGE" ]; then
+    warn "mkarchiso reported success and produced no image"
+    say  "   the working directory is at $WORK/mkarchiso"
+    exit 1
+  fi
+
   step "Done"
   say ""
-  ls -lh "$OUT"/*.iso 2>/dev/null | sed 's/^/   /'
+  ls -lh "$IMAGE" | sed 's/^/   /'
   say ""
   say "   Write it to a USB stick with:"
   say ""
-  say "     sudo dd if=$OUT/xos-*.iso of=/dev/sdX bs=4M status=progress oflag=sync"
+  say "     sudo dd if=$IMAGE of=/dev/sdX bs=4M status=progress oflag=sync"
   say ""
   say "   /dev/sdX is the stick, not a partition on it, and everything on it goes."
   exit 0

@@ -101,8 +101,21 @@ fi
 
 xstep "Looking at this machine"
 
-XOS_BIN="$(command -v xos || true)"
-XOSD_BIN="$(command -v xosd || true)"
+# On PATH if it is there, and otherwise where the medium puts them. A login
+# shell's PATH is not something to bet the hardware step on, and the medium
+# knows perfectly well where it installed its own binaries.
+find_binary() {
+  local name="$1" candidate
+  candidate="$(command -v "$name" 2>/dev/null)"
+  if [ -n "$candidate" ]; then printf '%s' "$candidate"; return 0; fi
+  for candidate in "/usr/local/bin/$name" "/usr/bin/$name" "/root/xos/target/release/$name"; do
+    [ -x "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+XOS_BIN="$(find_binary xos || true)"
+XOSD_BIN="$(find_binary xosd || true)"
 DAEMON_PID=""
 INVENTORY_FILE=""
 
@@ -130,30 +143,61 @@ stop_daemon() {
 }
 trap stop_daemon EXIT
 
-if [ -n "$XOS_BIN" ] && start_daemon; then
+# Three different things can go wrong here and they are not the same thing.
+# Reporting all of them as "no XOS binaries on this media" sent somebody
+# looking for a missing file when the file was there and the daemon had not
+# started, which is a different problem with a different fix.
+if [ -z "$XOS_BIN" ] || [ -z "$XOSD_BIN" ]; then
+  xwarn "there are no XOS binaries on this medium"
+  xlog "   it was built with --skip-binaries, so drivers will be resolved"
+  xlog "   conservatively. The install still works; it just knows less."
+elif ! start_daemon; then
+  xwarn "the XOS daemon did not start, so drivers will be resolved conservatively"
+  xlog "   $XOSD_BIN is here and did not come up within 15 seconds."
+  xlog "   Its log is at /tmp/xosd-live.log. The install still works."
+else
   INVENTORY_FILE="$(mktemp)"
   if "$XOS_BIN" hardware --json > "$INVENTORY_FILE" 2>/dev/null && [ -s "$INVENTORY_FILE" ]; then
     export XOS_HARDWARE_JSON="$INVENTORY_FILE"
     "$XOS_BIN" hardware 2>/dev/null | sed 's/^/  /'
   else
     # Not fatal. The install carries on and the hardware step falls back to
-    # what is safe on any machine, which is exactly what it is designed to do.
-    xwarn "the hardware inventory could not be read; drivers will be resolved conservatively"
+    # what is safe on any machine, which is what it is designed to do.
+    xwarn "the daemon is up but the inventory could not be read"
+    xlog "   drivers will be resolved conservatively; the install still works"
     INVENTORY_FILE=""
   fi
-else
-  xwarn "no XOS binaries on this media, so drivers will be resolved conservatively"
-  xlog "   the install still works; it just knows less about this machine"
 fi
 
 # ---------------------------------------------------------------- the disk
 
 xstep "Choosing a disk"
 
+# The disks somebody could sensibly install onto.
+#
+# A floppy controller reports itself as a disk and QEMU gives every machine one,
+# so /dev/fd0 was offered first in the list at 4K, above the real target.
+# Anything too small to hold Arch, a desktop and a local model is left out for
+# the same reason: an installer should not offer a choice that cannot work.
+MINIMUM_DISK_BYTES=$((8 * 1000 * 1000 * 1000))
+
 list_disks() {
-  lsblk -dpno NAME,SIZE,MODEL,TYPE 2>/dev/null |
-    awk '$NF == "disk" { $NF = ""; print }' |
-    grep -vE '^/dev/(loop|ram|zram|sr)' || true
+  # Names first, filtered, then each one asked for its size. Doing the
+  # arithmetic in a separate step rather than inside an awk program keeps
+  # this readable and keeps the quoting out of trouble.
+  local name size
+  lsblk -dpno NAME,TYPE 2>/dev/null |
+    awk '$2 == "disk" { print $1 }' |
+    grep -vE '^/dev/(loop|ram|zram|sr|fd)' |
+  while read -r name; do
+    size="$(lsblk -dpnbo SIZE "$name" 2>/dev/null | head -1)"
+    [ -n "$size" ] || continue
+    [ "$size" -ge "$MINIMUM_DISK_BYTES" ] 2>/dev/null || continue
+    printf '%s  %s  %s\n' \
+      "$name" \
+      "$(lsblk -dpno SIZE "$name" 2>/dev/null | head -1 | tr -d " ")" \
+      "$(lsblk -dpno MODEL "$name" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//')"
+  done
 }
 
 DISKS="$(list_disks)"
@@ -179,7 +223,8 @@ if [ -z "$DISK" ]; then
   case "$chosen" in
     /dev/*) DISK="$chosen" ;;
     ''|*[!0-9]*) xwarn "that is not a disk"; exit 1 ;;
-    *) DISK="$(echo "$DISKS" | sed -n "${chosen}p" | awk '{print $1}')" ;;
+    *) DISK="$(printf '%s
+' "$DISKS" | sed -n "${chosen}p" | awk '{print $1}')" ;;
   esac
 fi
 
@@ -192,7 +237,17 @@ fi
 
 xstep "Encryption"
 
-if has_aes_ni; then
+if [ "$INTERACTIVE" = "0" ] || [ "$ASSUME_YES" = "1" ]; then
+  # Never switched on by an assumption. LUKS asks for a passphrase and there is
+  # nobody here to type one, so the install would stop at a hidden prompt and
+  # wait for the rest of the afternoon. Only an explicit --encrypt counts.
+  if [ "$ENCRYPT" = "1" ]; then
+    xlog "   encrypting, as asked with --encrypt"
+    xwarn "LUKS will ask for a passphrase, and somebody has to be here to type it."
+  else
+    xlog "   not encrypting"
+  fi
+elif has_aes_ni; then
   xlog "   This CPU has AES-NI, so encryption costs almost nothing."
   if [ "$ENCRYPT" = "0" ] && ask_yes_no "Encrypt the disk?" 1; then
     ENCRYPT=1

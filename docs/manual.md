@@ -38,11 +38,11 @@ So: **use a virtual machine first.** It costs you twenty minutes and it is the
 difference between finding out that a package pin is stale and finding out on
 the machine you needed today.
 
-There is an XOS install medium now, and it is the intended way in. It has not
-been built or booted by anybody yet — the profile is written and tested, but
-`mkarchiso` only runs on Arch, so the image itself is still unproven. If you have
-an Arch machine, building it takes one command. If you do not, the Arch ISO route
-below still works.
+There is an XOS install medium, and it is the intended way in. It has been
+built and booted: on legacy BIOS and on UEFI, in a virtual machine, all the way
+to a root shell where typing `install-xos` starts the installer. What has *not*
+happened is a complete install onto a disk, and no physical machine has ever run
+any of this.
 
 ---
 
@@ -543,7 +543,10 @@ is, and say what machine you tested on.
 
 ## Known limits, stated plainly
 
-- **Never installed on real hardware.** Use a VM first.
+- **Never installed on real hardware.** The medium has been booted on both
+  firmwares in a virtual machine and the installer has been run as far as
+  choosing a disk. Nothing has been installed onto a disk and rebooted, and no
+  physical machine has run any of it. Use a VM first.
 - **Memory is not recalled into conversations.** It is written and searchable;
   the answering path does not consult it yet.
 - **Package versions are pinned to what was current when written.** Arch moves. A

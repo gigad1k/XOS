@@ -1,0 +1,11 @@
+# How mkinitcpio builds the initramfs for the install medium.
+#
+# One image, built against the archiso hooks above, at the exact path the boot
+# entries name. The stock preset would build two images under different names
+# and neither would be able to find the medium.
+PRESETS=('archiso')
+
+ALL_kver='/boot/vmlinuz-linux'
+
+archiso_config='/etc/mkinitcpio.conf.d/archiso.conf'
+archiso_image="/boot/initramfs-linux.img"

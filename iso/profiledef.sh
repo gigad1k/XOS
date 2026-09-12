@@ -22,11 +22,15 @@ buildmodes=('iso')
 
 # BIOS first in the list, deliberately. It is the mode most likely to be
 # forgotten and the one this project cannot do without.
+#
+# These two names are the current spelling. archiso once wanted the mode named
+# per-medium — `bios.syslinux.mbr` and `bios.syslinux.eltorito`, `uefi-x64.…esp`
+# and `…eltorito` — and still accepts those, with a deprecation warning, by
+# rewriting them to exactly these. Writing the old names would build the same
+# image and tell whoever built it off, four times, for no reason.
 bootmodes=(
-  'bios.syslinux.mbr'
-  'bios.syslinux.eltorito'
-  'uefi-x64.systemd-boot.esp'
-  'uefi-x64.systemd-boot.eltorito'
+  'bios.syslinux'
+  'uefi.systemd-boot'
 )
 
 arch="x86_64"
@@ -40,12 +44,20 @@ airootfs_image_tool_options=('-comp' 'xz' '-Xbcj' 'x86' '-b' '1M' '-Xdict-size' 
 
 bootstrap_tarball_compression=(zstd -c -T0 --auto-threads=logical --long -19)
 
+# mkarchiso does not preserve the modes of anything in airootfs: files arrive
+# as 644 and directories as 755, whoever owned them and whatever they were
+# committed as. Only the paths listed here get the mode they need.
+#
+# /usr/local/bin/install-xos was absent from this list once, so the one command
+# the medium tells people to type shipped non-executable. The medium booted
+# perfectly and could not install anything.
 file_permissions=(
   ["/etc/shadow"]="0:0:400"
   ["/etc/gshadow"]="0:0:400"
   ["/root"]="0:0:750"
   ["/root/.zlogin"]="0:0:644"
   ["/root/install-xos"]="0:0:755"
+  ["/usr/local/bin/install-xos"]="0:0:755"
   ["/usr/local/bin/xos"]="0:0:755"
   ["/usr/local/bin/xosd"]="0:0:755"
 )

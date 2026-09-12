@@ -1,2 +1,8 @@
 #!/usr/bin/env bash
-exec /root/xos/install/live.sh "$@"
+# The one command the medium tells people to type.
+#
+# `bash` rather than executing live.sh directly: mkarchiso does not preserve
+# modes from the profile's airootfs, so nothing under /root/xos is executable
+# on the medium however it was committed. Only this file is, through the
+# file_permissions list in profiledef.sh.
+exec bash /root/xos/install/live.sh "$@"

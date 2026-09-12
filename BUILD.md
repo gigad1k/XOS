@@ -858,3 +858,90 @@ built, added after the build was otherwise complete.
   exactly what has not been shown. `install/live.sh` was exercised end to end
   with every external command stubbed: it completes, refuses to choose a disk
   unattended, and calls nothing destructive under `--dry-run`.
+
+### Building and booting the medium
+
+The ISO existed as a profile and had never been built. An isolated Arch
+instance was made for it — a separate WSL distribution imported from the
+official Arch image, with its own filesystem — because mkarchiso only runs on
+Arch. archiso 90, qemu and OVMF went in beside it, so the image could be booted
+as well as built.
+
+**Everything below was found by building and booting, not by reading.** Before
+the first build the profile passed 73 of its own tests. It was unbootable.
+
+- **Every path in the syslinux configs was wrong.** ISOLINUX resolves a
+  relative path against the directory holding isolinux.bin, which archiso puts
+  at `/boot/syslinux`, so `boot/syslinux/whichsys.c32` asked for
+  `/boot/syslinux/boot/syslinux/whichsys.c32`. The machine stopped at a bare
+  `boot:` prompt. archiso's own profile uses bare filenames; so does this one
+  now.
+- **The kernel path had no leading slash and no install directory**, so it
+  resolved under `/boot/syslinux/` like everything else and pointed at nothing.
+- **The BIOS menu had no DEFAULT and no TIMEOUT**, so a machine left to install
+  itself waited forever for a keypress.
+- **The profile shipped no `splash.png`** while the menu named one.
+- **The initramfs had no archiso hook.** The profile shipped no
+  `mkinitcpio.conf.d/archiso.conf` and no `mkinitcpio.d/linux.preset`, so
+  mkinitcpio built a stock initramfs that knows nothing about live media. The
+  bootloader and kernel worked perfectly and then Switch Root failed and the
+  machine sat in an emergency shell. **A bootloader menu proves the bootloader
+  and nothing else.**
+- **The root account was locked**, so the emergency shell could not even be
+  used: "Cannot open access to console." archiso expects a getty autologin
+  drop-in, which this profile did not have.
+- **Arch's first-boot wizard ran instead of XOS.** With the boot fixed, the
+  medium came up asking for a timezone. Somebody who booted a stick to install
+  XOS was three questions deep in an Arch setup wizard.
+- **`install-xos` shipped non-executable.** mkarchiso does not preserve modes
+  from the profile's airootfs — everything arrives 644 — and only paths named
+  in `file_permissions` get what they need. The one command the medium tells
+  people to type could not run. So could not `live.sh`, which is why the
+  launcher now goes through `bash`.
+- **`build.sh` silently shipped a medium with no XOS on it.** Its fallback used
+  rsync, which is not a dependency it checked for; when rsync was missing it
+  printed "command not found", said the source had been copied, and carried on.
+- **A second build did nothing and reported success.** mkarchiso marks finished
+  steps inside its work directory and skips them next time, so rebuilding into
+  the same one produced no image at all and exited 0.
+- **The wifi drivers could not have been built.** `makepkg` ran as `nobody`,
+  whose home is `/` and is not writable, with `-s` which needs root to call
+  pacman.
+- **A floppy was offered as an install target.** QEMU gives every machine an
+  `/dev/fd0`, it reports itself as a disk, and it was listed first at 4K.
+- Four bootmodes used spellings archiso 90 deprecates, and the package list
+  named `wireless_urch_tools`, which does not exist and fails the whole build.
+
+The audit that ran alongside this raised 58 findings across the profile, the
+build script and the install path, and independently reached every one of the
+faults above. It also reached three the boot could not: **the XOS layer
+installed into the live medium's RAM rather than onto the target disk**, so the
+machine would have rebooted into bare Arch; **an encrypted install got neither
+the encrypt hook nor a cryptdevice parameter**, so it could not have unlocked
+itself; and **`base.sh` discarded every exit status**, so a failed pacstrap
+carried on writing to the live filesystem.
+
+#### What is actually proven
+
+- The image builds on Arch, twice over, from a clean work directory.
+- It boots on **legacy BIOS** and on **UEFI**, both to a root shell, with the
+  XOS motd on screen and the hostname set.
+- Typing `install-xos --dry-run` on the booted medium starts the installer,
+  which reads the machine, says plainly what it could not learn, lists the
+  disks and asks which one to use.
+
+#### What is still not
+
+- **Hardware detection during the install is not working yet.** The binaries are
+  on the medium and executable, and the daemon does not come up inside the live
+  environment within the time the installer waits. The install falls back to
+  resolving drivers conservatively, which is what that path is for, so it is a
+  degradation rather than a failure. It also reported the wrong reason: one
+  message covered "no binaries", "daemon would not start" and "inventory
+  unreadable", and it sent somebody looking for a missing file that was there.
+  Three messages now, and the daemon's log is named.
+- No install has been carried through onto a disk and rebooted from. The
+  installer was exercised as far as the disk question.
+- The bundled wifi drivers have never been built: that step reaches the AUR,
+  and a network failure there would say nothing about the profile.
+- No physical machine has run any of this. Everything above is QEMU.

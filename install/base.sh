@@ -163,13 +163,23 @@ fi
 
 xstep "Partitioning"
 
+# Everything here either works or stops. This file is the one exception to the
+# rule that nothing aborts an install: a failed mount or a failed pacstrap means
+# every command after it writes to the live medium instead of the disk, and
+# carrying on from there builds a machine nobody can describe.
 run() {
   if [ "$XOS_DRY_RUN" = "1" ]; then
     xlog "   would run: $*"
     return 0
   fi
   xlog "   $*"
-  "$@" >> "$XOS_LOG" 2>&1
+  if "$@" >> "$XOS_LOG" 2>&1; then
+    return 0
+  fi
+  xwarn "this failed, and everything after it depends on it:"
+  xlog "     $*"
+  xlog "   The log is at $XOS_LOG. Nothing further has been done."
+  exit 1
 }
 
 # Partition names differ between /dev/sda1 and /dev/nvme0n1p1.
@@ -280,6 +290,29 @@ else
   fi
   arch-chroot "$MOUNT" grub-mkconfig -o /boot/grub/grub.cfg >> "$XOS_LOG" 2>&1 \
     || xsoft_fail "grub-mkconfig failed; the machine may not boot"
+fi
+
+if [ "$ENCRYPT" = "1" ]; then
+  xstep "Teaching it to unlock itself"
+  if [ "$XOS_DRY_RUN" = "1" ]; then
+    xlog "   would add the encrypt hook and the cryptdevice parameter"
+  else
+    ROOT_UUID="$(blkid -s UUID -o value "$ROOT_PART" 2>/dev/null)"
+    # Without the hook the initramfs cannot open the container; without the
+    # parameter it does not know there is one. Both, or the machine installs
+    # perfectly and then asks for nothing and boots nowhere.
+    sed -i 's/^HOOKS=(\(.*\)block/HOOKS=(\1keyboard keymap block encrypt/' \
+      "$MOUNT/etc/mkinitcpio.conf" 2>/dev/null
+    arch-chroot "$MOUNT" mkinitcpio -P >> "$XOS_LOG" 2>&1 \
+      || xsoft_fail "could not rebuild the initramfs"
+    if [ -n "$ROOT_UUID" ] && [ -f "$MOUNT/etc/default/grub" ]; then
+      sed -i "s|^GRUB_CMDLINE_LINUX=\"\(.*\)\"|GRUB_CMDLINE_LINUX=\"\1 cryptdevice=UUID=$ROOT_UUID:xosroot root=/dev/mapper/xosroot\"|" \
+        "$MOUNT/etc/default/grub" 2>/dev/null
+      xlog "   it will ask for the passphrase at boot"
+    else
+      xsoft_fail "could not set the cryptdevice parameter; this machine may not boot"
+    fi
+  fi
 fi
 
 run arch-chroot "$MOUNT" systemctl enable NetworkManager

@@ -67,6 +67,22 @@ pinned_version() {
   ' "$XOS_LOCK"
 }
 
+# Run the package manager against whatever root is being installed to.
+#
+# This is the difference between installing XOS and installing nothing. Left to
+# itself, pacman installs into the running system — which during an install is
+# the live medium's RAM overlay, and that ceases to exist at the reboot.
+#
+# arch-chroot rather than `pacman --root`, because package scripts expect /proc,
+# /sys and /dev to be mounted when they run.
+package_manager() {
+  if [ -n "$XOS_ROOT" ] && [ "$XOS_PM" = "pacman" ] && command -v arch-chroot >/dev/null 2>&1; then
+    arch-chroot "$XOS_ROOT" pacman "$@"
+  else
+    "$XOS_PM" "$@"
+  fi
+}
+
 # Install a package at its pinned version.
 #
 # An unpinned package is refused rather than installed loose. The guardrail is
@@ -88,7 +104,7 @@ pin_install() {
   fi
 
   xlog "   installing $package $version"
-  if "$XOS_PM" -S --noconfirm --needed "$package" >> "$XOS_LOG" 2>&1; then
+  if package_manager -S --noconfirm --needed "$package" >> "$XOS_LOG" 2>&1; then
     return 0
   fi
   return 1
@@ -176,6 +192,21 @@ install_user_unit() { # name, content-on-stdin
 
 enable_user_unit() {
   [ "$XOS_DRY_RUN" = "1" ] && { xlog "   would enable $1"; return 0; }
+
+  # systemctl acts on the running system, which during an install is the live
+  # medium rather than the machine being built. The link it would make is one
+  # line, so it is made in the target directly.
+  if [ -n "$XOS_ROOT" ]; then
+    local wants="$XOS_ROOT/etc/systemd/user/default.target.wants"
+    mkdir -p "$wants" 2>/dev/null
+    if ln -sf "/etc/systemd/user/$1" "$wants/$1" 2>/dev/null; then
+      xlog "   $1 will start at boot"
+    else
+      xsoft_fail "could not enable $1"
+    fi
+    return 0
+  fi
+
   systemctl --user enable "$1" >> "$XOS_LOG" 2>&1 \
     || xsoft_fail "could not enable $1"
 }

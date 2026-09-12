@@ -24,6 +24,15 @@ arch-install-scripts
 grub
 efibootmgr
 
+# memory testing from the boot menu, offered on both firmwares.
+#
+# Not an optional nicety for this audience. A decade-old machine that is
+# unstable for no visible reason very often has failing RAM, and somebody
+# installing an operating system on one should be able to find that out from
+# the medium rather than after a week of strange crashes.
+memtest86+
+memtest86+-efi
+
 # getting online during the install
 networkmanager
 iwd
