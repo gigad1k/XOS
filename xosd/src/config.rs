@@ -308,17 +308,43 @@ impl Config {
     /// Returns the path and, when it differs from the configured one, the
     /// reason so the caller can say so out loud rather than silently moving.
     pub fn resolve_socket(&self) -> (PathBuf, Option<String>) {
-        let configured = self.socket.clone();
+        self.resolve_socket_with(std::env::var_os("XOS_SOCKET").map(PathBuf::from))
+    }
+
+    /// The same, with the environment override passed in rather than read.
+    ///
+    /// `xos` has always taken its socket from `XOS_SOCKET`. The daemon did not,
+    /// which meant setting that variable moved the client and left the daemon
+    /// where it was — the two ends pointing at different paths, the client
+    /// reporting that nothing is listening, and the daemon's own log saying it
+    /// is. The live installer did exactly this and concluded the daemon had
+    /// failed to start, on every machine whose session had XDG_RUNTIME_DIR set.
+    ///
+    /// Taking it as an argument keeps the decision testable without a test
+    /// having to mutate the environment of every other test running beside it.
+    pub fn resolve_socket_with(&self, override_path: Option<PathBuf>) -> (PathBuf, Option<String>) {
+        let from_environment = override_path.is_some();
+        let configured = override_path.unwrap_or_else(|| self.socket.clone());
         if let Some(parent) = configured.parent() {
             if parent.as_os_str().is_empty() || writable(parent) {
                 return (configured, None);
             }
             let fallback = runtime_socket();
-            let reason = format!(
-                "{} is not writable, listening on {} instead",
-                parent.display(),
-                fallback.display()
-            );
+            let reason = if from_environment {
+                // Worth naming the variable. Whoever set it is expecting the
+                // daemon to be at that path and will look there first.
+                format!(
+                    "XOS_SOCKET asks for {}, which is not writable; listening on {} instead",
+                    configured.display(),
+                    fallback.display()
+                )
+            } else {
+                format!(
+                    "{} is not writable, listening on {} instead",
+                    parent.display(),
+                    fallback.display()
+                )
+            };
             return (fallback, Some(reason));
         }
         (configured, None)
@@ -443,6 +469,40 @@ model = "claude-sonnet-5"
         let (path, reason) = config.resolve_socket();
         assert!(reason.is_some(), "a move must be reported, not silent");
         assert_ne!(path, config.socket);
+    }
+
+    #[test]
+    fn xos_socket_overrides_the_configured_path() {
+        // The CLI has always read XOS_SOCKET. When the daemon did not, setting
+        // it moved only the client: the installer waited fifteen seconds for a
+        // socket at one path while the daemon was listening at another, and
+        // reported that the daemon had failed to start.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = Config {
+            socket: dir.path().join("configured.sock"),
+            ..Config::default()
+        };
+        let wanted = dir.path().join("asked-for.sock");
+
+        let (path, reason) = config.resolve_socket_with(Some(wanted.clone()));
+
+        assert_eq!(path, wanted, "the environment has to win over the config");
+        assert!(reason.is_none(), "honouring it is not worth a warning");
+    }
+
+    #[test]
+    fn an_unusable_override_says_which_variable_asked_for_it() {
+        let config = Config::default();
+        let impossible = PathBuf::from("/proc/xos-not-writable/xosd.sock");
+
+        let (path, reason) = config.resolve_socket_with(Some(impossible));
+
+        assert_ne!(path, PathBuf::from("/proc/xos-not-writable/xosd.sock"));
+        let reason = reason.expect("moving somewhere else is always worth saying");
+        assert!(
+            reason.contains("XOS_SOCKET"),
+            "whoever set it will look at that path first: {reason}"
+        );
     }
 
     #[test]

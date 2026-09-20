@@ -329,6 +329,15 @@ check "it starts a daemon so drivers resolve" "the hardware step would find no i
   "$(grep -q 'start_daemon' "$REPO/install/live.sh" && echo 0 || echo 1)"
 check "it stops the daemon again" "it would be left running on the live system" \
   "$(grep -q 'stop_daemon' "$REPO/install/live.sh" && echo 0 || echo 1)"
+# The daemon told the installer nothing for fifteen seconds and the installer
+# concluded it had failed to start. It had not: xosd listened on its configured
+# path while XOS_SOCKET, which only the client read, pointed somewhere else.
+check "the daemon is asked to listen where the client will look" "the two ends would point at different paths" \
+  "$(grep -q 'export XOS_SOCKET' "$REPO/install/live.sh" && echo 0 || echo 1)"
+check "and xosd actually reads that variable" "setting it would move only the client" \
+  "$(grep -q 'XOS_SOCKET' "$REPO/xosd/src/config.rs" && echo 0 || echo 1)"
+check "asking the daemon for hardware cannot hang the install" "an unattended install would sit there forever" \
+  "$(grep -q 'timeout 30 "$XOS_BIN" hardware --json' "$REPO/install/live.sh" && echo 0 || echo 1)"
 check "it runs base.sh and then install.sh, in that order" "the layer needs a system under it" \
   "$([ "$(grep -n 'base.sh' "$REPO/install/live.sh" | tail -1 | cut -d: -f1)" -lt \
       "$(grep -n 'install.sh' "$REPO/install/live.sh" | tail -1 | cut -d: -f1)" ] && echo 0 || echo 1)"

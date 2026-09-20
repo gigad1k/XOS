@@ -180,9 +180,12 @@ elif ! start_daemon; then
   xlog "   Its log is at /tmp/xosd-live.log. The install still works."
 else
   INVENTORY_FILE="$(mktemp)"
-  if "$XOS_BIN" hardware --json > "$INVENTORY_FILE" 2>/dev/null && [ -s "$INVENTORY_FILE" ]; then
+  # Bounded, because an installer that hangs is worse than one that knows less.
+  # The daemon is up by this point, but "up" and "answering" are not the same
+  # thing, and there is nobody at an unattended install to press Ctrl+C.
+  if timeout 30 "$XOS_BIN" hardware --json > "$INVENTORY_FILE" 2>/dev/null && [ -s "$INVENTORY_FILE" ]; then
     export XOS_HARDWARE_JSON="$INVENTORY_FILE"
-    "$XOS_BIN" hardware 2>/dev/null | sed 's/^/  /'
+    timeout 30 "$XOS_BIN" hardware 2>/dev/null | sed 's/^/  /'
   else
     # Not fatal. The install carries on and the hardware step falls back to
     # what is safe on any machine, which is what it is designed to do.

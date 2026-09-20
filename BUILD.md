@@ -970,3 +970,57 @@ carried on writing to the live filesystem.
   rather than exposed, what is resident and what it costs, and the fact that the
   kill switch is a keybinding that does nothing over SSH so the command matters.
   `docs/manual.test.sh` checks its commands too.
+
+### Carrying an install through onto a disk
+
+The one claim never tested was the one that matters to somebody holding a USB
+stick: that an install completes and the machine boots from its own disk
+afterwards. Everything before this stopped at the disk question. Running it
+found three defects, two of them by reading the code on the way and one only by
+watching the screen.
+
+#### The two that a boot could not have found
+
+- **An encrypted install wrote a boot parameter nothing read.** base.sh
+  generates grub.cfg while setting up the bootloader, and the encryption block
+  runs after it. It added `cryptdevice=UUID=...` to `/etc/default/grub` and
+  stopped: the config the firmware actually reads still described an
+  unencrypted machine. The initramfs got its encrypt hook, so the machine would
+  have installed cleanly, rebooted, found no cryptdevice on its command line
+  and had nothing to unlock — the exact failure the comment three lines above
+  it warns about. It now regenerates, and checks the parameter went in at all
+  first, because the sed that writes it silently does nothing if
+  GRUB_CMDLINE_LINUX is not where it expects.
+- **The hardware step's kernel parameters never reached the boot menu.** Same
+  defect one layer out, and worse, because it is on every install rather than
+  the encrypted ones. 00-hardware.sh resolves what this machine's card needs
+  and writes it to `/etc/xos/kernel-parameters` — but it runs as part of the
+  XOS layer, which runs after base.sh has already generated grub.cfg. Nothing
+  read the file back. A card whose resolution asks for `nvidia-drm.modeset=1`
+  and does not get it comes up to a black screen, which is the single outcome
+  00-hardware.sh exists to prevent. `10-boot.sh` now runs last, after
+  everything that could ask for a parameter, and is the only thing that
+  regenerates the boot config with the answer.
+
+Both are the same mistake: writing to a file after the thing that reads it has
+already run. The rest of the install path was checked for a third and there is
+not one: nothing outside base.sh touches mkinitcpio.conf, fstab or the GRUB
+defaults, and 00-hardware.sh writes its pacman pins before anything reads them.
+
+#### The one only a boot could find
+
+- **A failed install restarted itself forever, erase and all.** Taking the
+  unattended entry, the installer reached "Looking at this machine", stopped,
+  and the whole thing began again from the boot banner, every couple of
+  minutes. agetty respawns the login when its shell exits, and `.bash_profile`
+  is that shell; it ran `exec install-xos --auto`, so the installer *was* the
+  session. When it exited the session ended, root was logged back in, and the
+  installer started again. Nothing bounded it. On the default entry that is an
+  annoyance; on the unattended entry it is a machine that picks the largest
+  disk, erases it, and on any failure does the whole thing again indefinitely
+  with nobody watching.
+
+  A marker in `/run` — tmpfs, so empty on every boot — now means it starts once
+  per boot, and a reboot still starts over. And no `exec`: an installer that
+  exits under exec leaves no shell to read the log that would say why, which is
+  why this needed a screenshot rather than a log to find.
