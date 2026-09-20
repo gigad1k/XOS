@@ -63,7 +63,10 @@ find_dkms_dir() {
 DKMS_DIR="$(find_dkms_dir)"
 
 DRY_RUN=0
-ASSUME_NO=0
+# The environment can say it too. An unattended install reaches this file
+# through install.sh, which passes flags of its own choosing, so the answer to
+# "is anybody reading this" has to be able to arrive some other way.
+ASSUME_NO="${XOS_ASSUME_NO:-0}"
 for argument in "$@"; do
   case "$argument" in
     --dry-run) DRY_RUN=1 ;;
@@ -553,7 +556,17 @@ if [ -n "$SUBMISSION" ] && [ "$SUBMISSION" != "{}" ]; then
     log "   Not sending anything. Submit it later with: xos hardware --submit"
   else
     printf '   Send it? [y/N] '
-    read -r answer
+    # Bounded. A console is a tty whether or not a person is sitting at it, so
+    # the check above cannot tell the difference and this question was found
+    # holding an unattended install open indefinitely. Nothing is sent when it
+    # expires, which is the same answer as the default and the safe one for a
+    # question about data leaving the machine.
+    answer=""
+    if ! read -r -t 120 answer; then
+      answer=""
+      log ""
+      log "   nobody answered, so nothing was sent"
+    fi
     case "$answer" in
       [Yy]*)
         log "   sending"

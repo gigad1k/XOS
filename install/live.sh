@@ -351,6 +351,17 @@ xlog ""
 # conversation has already happened here, so it is told not to repeat it.
 export XOS_ENCRYPTION_SETTLED=1
 
+# Nobody is reading the console during an unattended install, and one of the
+# layer steps stops to ask whether to send this machine's hardware report to
+# the community database. Its own check is "is stdin a tty", which a console
+# is whether or not a person is sitting at it, so it asked and then waited -
+# holding the whole install open on a question about data leaving the machine.
+# Not asking means not sending, which is the right answer to that question
+# when there is nobody to give one.
+if [ "$ASSUME_YES" = "1" ]; then
+  export XOS_ASSUME_NO=1
+fi
+
 BASE_ARGS=(--disk "$DISK" --hostname "$HOSTNAME_WANTED")
 [ "$ENCRYPT" = "1" ] && BASE_ARGS+=(--encrypt)
 [ "$ASSUME_YES" = "1" ] && BASE_ARGS+=(--yes)

@@ -339,5 +339,23 @@ check "a dry run does not touch pacman.conf" "pacman.conf was modified" \
 check "a dry run says what it would have done" "nothing reported" \
   "$(grep -q "would install nvidia-580xx-dkms" "$ROOT_DIR/var/log/xos-hardware.log" && echo 0 || echo 1)"
 
+printf '
+An unattended install is never asked anything
+'
+
+# The hardware step stops to ask whether to send this machine to the community
+# database. Its guard was "is stdin a tty", and a console is a tty whether or
+# not a person is sitting at it, so during an unattended install it asked and
+# then waited - holding the install open forever on a question about data
+# leaving the machine. A real boot was found sitting on exactly that.
+check "the environment can say nobody is reading" "flags alone cannot reach this file" \
+  "$(grep -q 'ASSUME_NO="\${XOS_ASSUME_NO:-0}"' "$SCRIPT" && echo 0 || echo 1)"
+check "and live.sh says it for an unattended install" "the prompt would still appear" \
+  "$(grep -q 'export XOS_ASSUME_NO=1' "$INSTALL_DIR/live.sh" && echo 0 || echo 1)"
+check "the question cannot hold the install open" "one unanswered prompt stops everything" \
+  "$(grep -q 'read -r -t 120 answer' "$SCRIPT" && echo 0 || echo 1)"
+check "and an expired question sends nothing" "silence would be taken for consent" \
+  "$(grep -q 'nobody answered, so nothing was sent' "$SCRIPT" && echo 0 || echo 1)"
+
 printf '\n%s passed, %s failed\n\n' "$PASSED" "$FAILED"
 [ "$FAILED" = "0" ]
