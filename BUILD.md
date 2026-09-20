@@ -1005,9 +1005,11 @@ watching the screen.
   regenerates the boot config with the answer.
 
 Both are the same mistake: writing to a file after the thing that reads it has
-already run. The rest of the install path was checked for a third and there is
-not one: nothing outside base.sh touches mkinitcpio.conf, fstab or the GRUB
-defaults, and 00-hardware.sh writes its pacman pins before anything reads them.
+already run. A search for a third turned up nothing at the time - nothing
+outside base.sh touches mkinitcpio.conf, fstab or the GRUB defaults - but that
+search only covered files written after a reader. A third instance of the wider
+fault, a step running against the wrong root, was found later and is recorded
+at the end of these notes.
 
 #### The one only a boot could find
 
@@ -1057,3 +1059,63 @@ there is nobody at an unattended install to press Ctrl+C.
 The general lesson is the one this whole file keeps recording. Running the
 thing found what the tests could not, and running the *component* by hand found
 in one line what reading the logs had misdiagnosed for a week.
+
+#### The install that erased the disk and then could not install anything
+
+The unattended install partitioned `/dev/vda`, made both filesystems, mounted
+them, downloaded all 550MB of the base system, and then stopped:
+
+```
+warning: Public keyring not found; have you run 'pacman-key --init'?
+downloading required keys...
+error: keyring is not writable          (twenty times)
+error: required key missing from keyring
+==> ERROR: Failed to install packages to new root
+```
+
+The downloads above the error are the important part: the network was never the
+problem. Arch packages are signed, this medium had no initialised pacman
+keyring, and on a squashfs root there was nowhere writable to build one.
+
+Arch's own releng profile carries two units for exactly this — a tmpfs mounted
+over `/etc/pacman.d/gnupg`, and a oneshot bound to it that runs `pacman-key
+--init` and `--populate` at boot. This profile was written without them, so
+every install it has ever attempted would have failed at the same line, and
+would have failed with the disk already erased.
+
+Three earlier fixes are what made this findable at all. Without the restart-loop
+fix the installer erased and retried forever and never showed the message;
+without dropping `exec` there was no shell to read the log from; and the log
+only mattered because the socket fix had already cleared away a misdiagnosis
+that would have sent the next hour in the wrong direction.
+
+#### One more step that thought it was on the machine it was building
+
+Reading ahead to what runs after pacstrap found the same fault a third time.
+Every line of `install.sh` is `$XOS_ROOT`-aware except the one that installs the
+desktop, which was a pipe into bash on whatever machine happened to be running
+the script:
+
+```
+curl -fsSL https://omarchy.org/install | bash
+```
+
+During an install from the medium that put the entire desktop into the live
+system's RAM. The machine would then reboot into the target disk, find Arch with
+the XOS layer on top and nothing able to draw a window, and the copy that did
+get installed is discarded by the same reboot that revealed the problem.
+
+An audit had already found this exact defect for the XOS layer and it was fixed
+there. It was left one step above, in the line that installs the thing XOS is
+layered over.
+
+It downloads into the target and runs under `arch-chroot` now, because a pipe
+cannot cross a chroot. The un-chrooted form is kept for installing onto a
+machine you are already sitting at, which is the case it was written for and the
+only one where it is correct.
+
+So: three separate instances of one mistake — a step that writes to, or runs on,
+the wrong root or the wrong moment. The earlier claim in these notes that a
+search found no third instance was made before this one was looked for, and it
+was wrong. Ordering and targeting are now checked by tests in all three places,
+because prose in a comment did not stop any of them.
