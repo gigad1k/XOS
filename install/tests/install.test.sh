@@ -335,6 +335,15 @@ check "UEFI gets an EFI system partition" "nowhere for the bootloader" \
   "$(grep -q 'typecode=1:ef00' "$WORK/base3.txt" && echo 0 || echo 1)"
 check "encryption is opt-in, not the default" "it encrypted without being asked" \
   "$(grep -q 'Not encrypting' "$WORK/base3.txt" && echo 0 || echo 1)"
+
+# The encrypted install adds cryptdevice= to /etc/default/grub, but GRUB's real
+# config was generated earlier in the file. If nothing regenerates it, the
+# parameter sits in a file the firmware never reads and the machine boots
+# nowhere. Order is the bug, so order is what is checked.
+CRYPT_EDIT="$(grep -n 'cryptdevice=UUID=\$ROOT_UUID:xosroot' "$INSTALL/base.sh" | head -1 | cut -d: -f1)"
+LAST_MKCONFIG="$(grep -n 'grub-mkconfig' "$INSTALL/base.sh" | tail -1 | cut -d: -f1)"
+check "an encrypted install regenerates grub.cfg after setting cryptdevice"   "the parameter is written after the last grub-mkconfig, so it never reaches the boot menu"   "$([ -n "$CRYPT_EDIT" ] && [ -n "$LAST_MKCONFIG" ] && [ "$LAST_MKCONFIG" -gt "$CRYPT_EDIT" ] && echo 0 || echo 1)"
+check "and checks the parameter actually went in" "a sed that matched nothing would pass silently"   "$(grep -q 'the cryptdevice parameter did not go in' "$INSTALL/base.sh" && echo 0 || echo 1)"
 check "it will not erase a disk with nobody watching" "it would run unattended" \
   "$(grep -q 'Nothing is reading the prompt' "$WORK/base.txt" || grep -q 'dry run' "$WORK/base3.txt" && echo 0 || echo 1)"
 

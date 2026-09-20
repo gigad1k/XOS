@@ -308,7 +308,23 @@ if [ "$ENCRYPT" = "1" ]; then
     if [ -n "$ROOT_UUID" ] && [ -f "$MOUNT/etc/default/grub" ]; then
       sed -i "s|^GRUB_CMDLINE_LINUX=\"\(.*\)\"|GRUB_CMDLINE_LINUX=\"\1 cryptdevice=UUID=$ROOT_UUID:xosroot root=/dev/mapper/xosroot\"|" \
         "$MOUNT/etc/default/grub" 2>/dev/null
-      xlog "   it will ask for the passphrase at boot"
+      # Check it landed rather than assume it did. A sed whose pattern does
+      # not match changes nothing and says nothing, and the result is a
+      # machine that installs cleanly and will not boot — which is the exact
+      # failure this whole block exists to prevent.
+      if grep -q "cryptdevice=UUID=$ROOT_UUID" "$MOUNT/etc/default/grub" 2>/dev/null; then
+        # And regenerate the config. GRUB was set up further up, before this
+        # parameter existed, so the grub.cfg on the disk right now describes
+        # an unencrypted machine. Editing /etc/default/grub does nothing on
+        # its own; grub.cfg is what actually gets read at boot.
+        if arch-chroot "$MOUNT" grub-mkconfig -o /boot/grub/grub.cfg >> "$XOS_LOG" 2>&1; then
+          xlog "   it will ask for the passphrase at boot"
+        else
+          xsoft_fail "could not rewrite the GRUB config; this machine may not boot"
+        fi
+      else
+        xsoft_fail "the cryptdevice parameter did not go in; this machine may not boot"
+      fi
     else
       xsoft_fail "could not set the cryptdevice parameter; this machine may not boot"
     fi
