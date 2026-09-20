@@ -9,18 +9,42 @@
 #
 # Ctrl+C leaves a shell, so nobody is trapped in an installer they opened by
 # accident.
+#
+# # Once per boot, and never exec
+#
+# agetty respawns the login when its shell exits. This file is that shell, so
+# starting the installer here and letting it be the whole session means that an
+# installer which exits for any reason is started again immediately, forever.
+# On the unattended entry that is not a cosmetic loop: it is a machine retrying
+# an erase every couple of minutes with nobody watching.
+#
+# So two rules. A marker in /run, which is tmpfs and therefore empty on every
+# boot, means the installer runs once per boot and a second login says so
+# instead of restarting it. And never exec: the shell has to outlive the
+# installer, or a failed install leaves no way to read the log that would say
+# why — which is exactly how this was found.
 
 if [[ "$(tty)" == "/dev/tty1" ]]; then
     cat /etc/motd
 
-    # The boot menu carries the choice, so the kernel command line is where
-    # this reads it from.
-    if grep -qw 'xos.auto' /proc/cmdline; then
-        exec install-xos --auto
-    fi
+    if [[ -e /run/xos-installer-started ]]; then
+        echo
+        echo "  The installer already ran during this boot, so it has not been"
+        echo "  started again. Type install-xos to run it, or reboot to start over."
+        echo
+    else
+        : > /run/xos-installer-started
 
-    install-xos
-    echo
-    echo "  The installer has exited. Type install-xos to start it again."
-    echo
+        # The boot menu carries the choice, so the kernel command line is where
+        # this reads it from.
+        if grep -qw 'xos.auto' /proc/cmdline; then
+            install-xos --auto
+        else
+            install-xos
+        fi
+
+        echo
+        echo "  The installer has exited. Type install-xos to start it again."
+        echo
+    fi
 fi

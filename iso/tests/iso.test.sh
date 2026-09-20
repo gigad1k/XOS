@@ -278,6 +278,20 @@ check "the unattended path counts down before it starts" "no chance to stop it" 
 check "the default path still asks which disk" "it would pick one on its own" \
   "$(grep -q 'Which disk?' "$REPO/install/live.sh" && echo 0 || echo 1)"
 
+# agetty respawns the login shell when it exits, and this file IS that shell.
+# An installer started here that exits for any reason is therefore started
+# again, immediately, with nothing bounding it. On the unattended entry that is
+# a machine re-erasing a disk every couple of minutes with nobody watching, and
+# it is exactly what a real boot did before these four checks existed.
+check "the installer is not replaced by exec, so a shell outlives it" "a failed install would leave no way to read the log" \
+  "$(grep -qE '^[[:space:]]*exec[[:space:]]+install-xos' "$LOGIN_FILE" && echo 1 || echo 0)"
+check "it starts the installer once per boot, not once per login" "an installer that exits would restart forever" \
+  "$(grep -q '/run/xos-installer-started' "$LOGIN_FILE" && echo 0 || echo 1)"
+check "the marker lives in tmpfs so a reboot starts over" "a stale marker would stop the medium installing at all" \
+  "$(grep -q ': > /run/xos-installer-started' "$LOGIN_FILE" && echo 0 || echo 1)"
+check "a second login says why it did not start" "it would look broken" \
+  "$(grep -q 'already ran during this boot' "$LOGIN_FILE" && echo 0 || echo 1)"
+
 # ---------------------------------------------------------------- the build
 
 printf '\nThe build script assembles what the installer needs\n'
