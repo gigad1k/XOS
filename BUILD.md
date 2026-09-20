@@ -1197,3 +1197,40 @@ So the count for the day is five separate instances of one mistake — a step
 acting on the machine doing the building rather than the machine being built —
 in `base.sh`, `install.sh`, `09-xosd.sh` and twice in `00-hardware.sh`. None of
 them were caught by 300-odd shell tests, and all of them are now.
+
+#### The install reported success and produced a machine missing most of XOS
+
+Sweeping the layer for the same fault turned it from three instances into eight,
+and the shape of the last five is worth stating plainly because they are the
+most dangerous kind of bug in this codebase: **they all failed politely.**
+
+02-runtimes installs pipx, npm and uv into the target. Five later steps then
+asked `command -v` whether those tools existed — on the machine running the
+script, which during an install from media is the live system, where they never
+were. So each skipped itself and said something entirely reasonable:
+
+```
+pipx is missing, so Open WebUI was skipped
+npm is missing, so the OpenClaw gateway was skipped
+npm is missing, so OpenCode was skipped
+uv is missing, so piper was skipped
+no huggingface CLI, so nothing was downloaded
+```
+
+None of them were missing. They were on the disk being built, one `arch-chroot`
+away. An install from the medium therefore produced a machine with no chat
+interface, no search, no messaging, no coding agent, no speech, no wake word and
+no local model — and finished by saying it had installed XOS.
+
+The last of those breaks the first non-negotiable in CLAUDE.md, which is that
+XOS works offline. A machine with no local model does not.
+
+`lib.sh` already had `package_manager()`, which exists precisely to cross into
+the target, with a comment saying it is "the difference between installing XOS
+and installing nothing". It solved the problem for packages and only for
+packages. `in_target()` now sits beside it and does the same for everything
+else, and it is a no-op when XOS is installed onto the machine you are sitting
+at — the case all fourteen bare calls were written for.
+
+The test greps every layer step for a bare probe or a bare call; against the
+commit before the fix it names four files.
