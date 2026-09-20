@@ -290,6 +290,22 @@ check "boot.sh points at a repository that exists" "the one-line install would f
 check "no placeholder host is offered as the way in" "xos.sh does not exist yet" \
   "$(grep -E '^#   curl' "$INSTALL/boot.sh" | grep -q 'xos.sh' && echo 1 || echo 0)"
 printf '
+The local model goes onto the disk too
+'
+
+# uv and the huggingface CLI are installed into the target by 02-runtimes, not
+# onto the machine running the script. Looking for them here means finding
+# nothing during an install from media, skipping the download, and leaving a
+# machine whose first non-negotiable is that it works offline with no local
+# model on it.
+check "the downloader is looked for in the target" "it would never be found on the medium" \
+  "$(grep -q 'in_target command -v hf' "$INSTALL/07-models.sh" && echo 0 || echo 1)"
+check "and the download runs there" "it would write to the wrong filesystem" \
+  "$(grep -q 'in_target hf download' "$INSTALL/07-models.sh" && echo 0 || echo 1)"
+check "with a path that means something inside it" "a chroot has no install-root prefix" \
+  "$(grep -q 'MODELS_THERE' "$INSTALL/07-models.sh" && echo 0 || echo 1)"
+
+printf '
 Omarchy goes into the machine being built
 '
 

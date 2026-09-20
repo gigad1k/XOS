@@ -123,11 +123,32 @@ CONFIDENCE="$(printf '%s' "$CHOICE" | cut -f5)"
 xlog "   $MODEL_NAME  ($CONFIDENCE)"
 xlog "   $REPOSITORY / $FILE"
 
+# Downloading belongs to the machine being built.
+#
+# uv and the huggingface CLI are installed into the target by 02-runtimes, not
+# onto whatever is running this script. Installing from media, neither is on
+# PATH here, so both steps below found nothing and skipped - leaving a machine
+# whose entire point is a local model without one, on a project whose first
+# non-negotiable is that it works offline.
+#
+# The paths change with it: inside the target, $XOS_ROOT/opt/xos/models is
+# /opt/xos/models.
+MODELS_THERE="/opt/xos/models"
+[ -z "$XOS_ROOT" ] && MODELS_THERE="$MODELS"
+
+in_target() {
+  if [ -n "$XOS_ROOT" ] && command -v arch-chroot >/dev/null 2>&1; then
+    arch-chroot "$XOS_ROOT" "$@"
+  else
+    "$@"
+  fi
+}
+
 xstep "The downloader"
 if [ "$XOS_DRY_RUN" = "1" ]; then
   xlog "   would install the huggingface CLI"
-elif command -v uv >/dev/null 2>&1; then
-  uv tool install "huggingface-hub[cli]" >> "$XOS_LOG" 2>&1 \
+elif in_target command -v uv >/dev/null 2>&1; then
+  in_target uv tool install "huggingface-hub[cli]" >> "$XOS_LOG" 2>&1 \
     || xsoft_fail "the huggingface CLI did not install"
 fi
 
@@ -138,8 +159,8 @@ if [ "$XOS_DRY_RUN" = "1" ]; then
 fi
 
 mkdir -p "$MODELS" 2>/dev/null
-if command -v hf >/dev/null 2>&1; then
-  hf download "$REPOSITORY" "$FILE" --local-dir "$MODELS" >> "$XOS_LOG" 2>&1 \
+if in_target command -v hf >/dev/null 2>&1; then
+  in_target hf download "$REPOSITORY" "$FILE" --local-dir "$MODELS_THERE" >> "$XOS_LOG" 2>&1 \
     || xsoft_fail "the download did not finish; XOS will use an API until it does"
 else
   xsoft_fail "no huggingface CLI, so nothing was downloaded"
