@@ -1160,3 +1160,40 @@ The XOS layer had started and had finished its hardware step when this run was
 stopped at the prompt above; the desktop, the local model and the daemon's own
 units have not been carried through on a real disk yet. And still no physical
 machine: all of this is QEMU with KVM.
+
+#### The file that prevents black screens was causing one
+
+Reading the rest of the layer for the same fault found it twice more, and the
+second is the worst thing in these notes.
+
+`09-xosd.sh` ignored the binaries the medium carries and rebuilt from source.
+`install_build_dependencies` runs `pacman -S rust` directly rather than through
+the target-aware wrapper beside it, so during an install from media a Rust
+toolchain is fetched into the live system's RAM and then ten minutes of
+somebody's install go on recompiling what is already sitting in
+`/usr/local/bin` — on a machine chosen for being old, into a tmpfs that an 8GB
+box may not have room for. It now prefers what is already built whenever there
+is a separate root to install into, and says so plainly when a medium carries
+none.
+
+`00-hardware.sh` was worse. It works out which driver this card needs — the
+entire point of the file — and then installed it with a bare `pacman -S`.
+Everything else in that file is ROOT-aware: the log, the report, the kernel
+parameters, the pacman pins. Not the one call that puts the driver somewhere.
+Installing from media, the driver went into the live system in RAM, and the
+reboot discarded it. The machine came up on its own disk with no driver at all,
+which is the black screen the file's own header calls the one unrecoverable
+outcome.
+
+The query was the same mistake pointing the other way: `pacman -Qq` asked the
+medium whether a package was installed, and the medium carries `linux-firmware`,
+`networkmanager` and plenty else the fresh target does not, so those were
+reported "already here" and skipped.
+
+A sweep of every other step found none: 01 through 08 and 10 install only
+through `pin_install`, which goes through the wrapper.
+
+So the count for the day is five separate instances of one mistake — a step
+acting on the machine doing the building rather than the machine being built —
+in `base.sh`, `install.sh`, `09-xosd.sh` and twice in `00-hardware.sh`. None of
+them were caught by 300-odd shell tests, and all of them are now.
