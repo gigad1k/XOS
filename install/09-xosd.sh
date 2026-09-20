@@ -87,14 +87,71 @@ install_build_dependencies() {
   esac
 }
 
-xstep "Build dependencies"
-install_build_dependencies || xwarn "build dependencies may be incomplete"
+# ---------------------------------------------------------------- prebuilt
+
+# Already built beats building, and on install media it is the only right
+# answer.
+#
+# The medium carries xosd and xos compiled at build time, precisely so that
+# installing does not need a Rust toolchain. Building here anyway does two wrong
+# things at once: pacman -S rust installs onto the machine running the script,
+# which during an install from the medium is the live system in RAM and not the
+# disk being built, and then it spends ten minutes of somebody's install
+# recompiling what is already sitting in /usr/local/bin.
+#
+# So when there is another root to install into, prebuilt binaries are the whole
+# of it, and a medium without them says so rather than quietly fetching a
+# compiler into memory.
+PREBUILT_XOSD=""
+PREBUILT_XOS=""
+
+find_prebuilt() {
+  local name="$1" candidate
+  for candidate in "${XOS_PREBUILT_DIR:+$XOS_PREBUILT_DIR/$name}" \
+                   "$SOURCE/target/release/$name" \
+                   "/usr/local/bin/$name" \
+                   "/usr/bin/$name"
+  do
+    [ -n "$candidate" ] || continue
+    [ -x "$candidate" ] || continue
+    # Never the file this run is about to write.
+    [ "$candidate" = "$PREFIX/bin/$name" ] && continue
+    printf '%s' "$candidate"
+    return 0
+  done
+  return 1
+}
+
+if [ -n "$XOS_ROOT" ]; then
+  PREBUILT_XOSD="$(find_prebuilt xosd || true)"
+  PREBUILT_XOS="$(find_prebuilt xos || true)"
+fi
+
+if [ -n "$PREBUILT_XOSD" ] && [ -n "$PREBUILT_XOS" ]; then
+  xstep "Prebuilt binaries"
+  xlog "   $PREBUILT_XOSD"
+  xlog "   $PREBUILT_XOS"
+  xlog "   no toolchain is needed, and nothing is compiled"
+elif [ -n "$XOS_ROOT" ] && [ "$XOS_DRY_RUN" != "1" ] && ! command -v cargo >/dev/null 2>&1; then
+  xstep "Prebuilt binaries"
+  xwarn "there is no built xosd here and no toolchain to build one"
+  xlog "   If this is install media, it was built with --skip-binaries: build"
+  xlog "   it again without that. Otherwise install a Rust toolchain, or run"
+  xlog "   this script on the installed machine where one can be installed"
+  xlog "   somewhere that does not disappear at the next reboot."
+  exit 1
+else
+  xstep "Build dependencies"
+  install_build_dependencies || xwarn "build dependencies may be incomplete"
+fi
 
 # ---------------------------------------------------------------- build
 
 xstep "Building"
 
-if [ "$XOS_DRY_RUN" = "1" ]; then
+if [ -n "$PREBUILT_XOSD" ] && [ -n "$PREBUILT_XOS" ]; then
+  xlog "   already built; nothing to compile"
+elif [ "$XOS_DRY_RUN" = "1" ]; then
   xlog "   would build xosd and xos in release mode from $SOURCE"
 else
   if ! command -v cargo >/dev/null 2>&1; then
@@ -115,10 +172,12 @@ if [ "$XOS_DRY_RUN" = "1" ]; then
   xlog "   would install xosd and xos into $PREFIX/bin"
 else
   mkdir -p "$PREFIX/bin" 2>/dev/null
-  install -m 0755 "$SOURCE/target/release/xosd" "$PREFIX/bin/xosd" 2>/dev/null \
-    || { xwarn "could not install xosd"; INSTALLED=0; }
-  install -m 0755 "$SOURCE/target/release/xos" "$PREFIX/bin/xos" 2>/dev/null \
-    || { xwarn "could not install xos"; INSTALLED=0; }
+  FROM_XOSD="${PREBUILT_XOSD:-$SOURCE/target/release/xosd}"
+  FROM_XOS="${PREBUILT_XOS:-$SOURCE/target/release/xos}"
+  install -m 0755 "$FROM_XOSD" "$PREFIX/bin/xosd" 2>/dev/null \
+    || { xwarn "could not install xosd from $FROM_XOSD"; INSTALLED=0; }
+  install -m 0755 "$FROM_XOS" "$PREFIX/bin/xos" 2>/dev/null \
+    || { xwarn "could not install xos from $FROM_XOS"; INSTALLED=0; }
 fi
 
 # The hardware database travels with the daemon, because a daemon that cannot

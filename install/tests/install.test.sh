@@ -321,6 +321,37 @@ check "it detects the package manager rather than assuming pacman" "no detection
 check "it handles Debian as well as Arch" "Debian is not handled" \
   "$(grep -q 'apt-get install' "$INSTALL/09-xosd.sh" && echo 0 || echo 1)"
 
+# The medium ships xosd and xos already compiled. Building them again during an
+# install would install a Rust toolchain onto the machine running the script -
+# which, installing from the medium, is the live system in RAM rather than the
+# disk being built - and then spend ten minutes recompiling what is already
+# there.
+PREBUILT="$WORK/prebuilt"
+mkdir -p "$PREBUILT"
+printf '#!/bin/sh
+exit 0
+' > "$PREBUILT/xosd"
+printf '#!/bin/sh
+exit 0
+' > "$PREBUILT/xos"
+chmod +x "$PREBUILT/xosd" "$PREBUILT/xos"
+R8="$WORK/prebuilt-root"
+mkdir -p "$R8/etc" "$R8/var/log"
+printf '[options]
+' > "$R8/etc/pacman.conf"
+env PATH="$STUBS:$PATH" XOS_INSTALL_ROOT="$R8" XOS_PREBUILT_DIR="$PREBUILT" \
+    XOS_SOURCE="$INSTALL/.." XOS_PACKAGE_MANAGER="$WORK/pm" \
+    XOS_LOG="$R8/var/log/xos-install.log" \
+    bash "$INSTALL/09-xosd.sh" > "$WORK/prebuilt.txt" 2>&1
+check "it uses binaries that are already built" "it would rebuild what the medium carries" \
+  "$(grep -q 'no toolchain is needed' "$WORK/prebuilt.txt" && echo 0 || echo 1)"
+check "and compiles nothing" "ten minutes of an install spent on nothing" \
+  "$(grep -q 'nothing to compile' "$WORK/prebuilt.txt" && echo 0 || echo 1)"
+check "and puts them in the target root" "the installed machine would have no XOS on it" \
+  "$([ -x "$R8/usr/local/bin/xosd" ] && [ -x "$R8/usr/local/bin/xos" ] && echo 0 || echo 1)"
+check "without installing a toolchain anywhere" "packages would land on the live system" \
+  "$(grep -q 'rust' "$WORK/calls.txt" 2>/dev/null && echo 1 || echo 0)"
+
 # ---------------------------------------------------------------- the disk
 
 printf '\nThe one script that destroys data\n'
