@@ -109,6 +109,41 @@ else
   xlog "   Not encrypting, which on a CPU without AES-NI is the sensible default."
 fi
 
+# ---------------------------------------------------------------- network
+
+xstep "Network"
+
+# Checked here, before the disk is touched, and not one line later.
+#
+# pacstrap downloads about 600MB. If it cannot, base.sh stops — but by then the
+# partition table has been replaced and the filesystems made, so whatever was on
+# that machine is already gone. Somebody who has just lost a working system to
+# an installer that then said "could not reach the mirrors" has been failed
+# twice: once by the network and once by the order of these two steps.
+#
+# pacman -Sy rather than a ping, because reaching a mirror and being able to
+# download from it are different claims, and the second one is the one that
+# matters. It also warms the database pacstrap is about to want.
+if [ "$XOS_DRY_RUN" = "1" ]; then
+  xlog "   dry run, so the mirrors are not contacted"
+elif ! command -v pacman >/dev/null 2>&1; then
+  # Not fatal: this file is only ever run where pacstrap exists, and if pacman
+  # is somehow absent the failure two steps down will say so far more clearly
+  # than a guess here would.
+  xlog "   no pacman here to ask, so the mirrors were not checked"
+elif timeout 60 pacman -Sy >> "$XOS_LOG" 2>&1; then
+  xlog "   the package mirrors answer"
+else
+  xwarn "no package mirror could be reached, and the install needs one"
+  xlog "   Nothing has been changed and the disk is untouched. XOS downloads"
+  xlog "   about 600MB during the install, so it stops here rather than erasing"
+  xlog "   the disk first and finding out afterwards."
+  xlog ""
+  xlog "   Connect this machine to the internet and run the installer again."
+  xlog "   On wifi, run iwctl or nmtui first. The log is at $XOS_LOG."
+  exit 1
+fi
+
 # ---------------------------------------------------------------- the disk
 
 xstep "The disk"

@@ -932,7 +932,9 @@ carried on writing to the live filesystem.
 
 #### What is still not
 
-- **Hardware detection during the install is not working yet.** The binaries are
+- **Hardware detection during the install is not working yet.** (Since fixed, and
+  the reason given here turned out to be wrong — see "The daemon was never slow;
+  it was never asked" below.) The binaries are
   on the medium and executable, and the daemon does not come up inside the live
   environment within the time the installer waits. The install falls back to
   resolving drivers conservatively, which is what that path is for, so it is a
@@ -1024,3 +1026,34 @@ defaults, and 00-hardware.sh writes its pacman pins before anything reads them.
   per boot, and a reboot still starts over. And no `exec`: an installer that
   exits under exec leaves no shell to read the log that would say why, which is
   why this needed a screenshot rather than a log to find.
+
+#### The daemon was never slow; it was never asked
+
+The notes above said hardware detection during the install "does not come up
+inside the live environment within the time the installer waits", and put it
+down to the daemon being slow on live media. That was wrong, and the wrongness
+was load-bearing: it made a bug look like a performance characteristic, and
+performance characteristics do not get fixed.
+
+Running the medium's own `xosd` by hand settles it in one line. It comes up in
+a third of a second and logs `xosd listening socket=/run/xosd.sock`. The client
+beside it, from the same medium, says `cannot reach the daemon. Tried:
+/run/xosd-probe.sock`.
+
+`XOS_SOCKET` was only ever read by `xos-cli`. `live.sh` exports it to put both
+ends in the same place, which moved the client and left the daemon on its
+configured path. Any session with `XDG_RUNTIME_DIR` set — which is every
+autologin under systemd, so every boot of the medium — has the two ends looking
+at different paths. The installer then waits its fifteen seconds for a socket
+that will never exist and reports a daemon that is running fine.
+
+`resolve_socket` reads the variable now, `resolve_socket_with` takes it as an
+argument so the test does not have to mutate the environment of every test
+beside it, and an override that cannot be honoured names the variable in its
+reason. The two hardware calls in `live.sh` are bounded at thirty seconds as
+well: the daemon being up and the daemon answering are different things, and
+there is nobody at an unattended install to press Ctrl+C.
+
+The general lesson is the one this whole file keeps recording. Running the
+thing found what the tests could not, and running the *component* by hand found
+in one line what reading the logs had misdiagnosed for a week.

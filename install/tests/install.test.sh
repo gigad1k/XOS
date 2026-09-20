@@ -322,6 +322,19 @@ check "a dry run says what it would do" "it said nothing" \
   "$(grep -q 'would run: parted' "$WORK/base2.txt" && echo 0 || echo 1)"
 check "it warns before destroying anything" "no warning" \
   "$(grep -q 'WILL BE DESTROYED' "$WORK/base2.txt" && echo 0 || echo 1)"
+
+# An installer that erases the disk and then discovers it cannot download
+# anything has failed somebody twice. pacstrap pulls about 600MB, so whether
+# the mirrors answer is checked before the partition table is replaced, not
+# after.
+NET_CHECK="$(grep -n 'pacman -Sy' "$INSTALL/base.sh" | head -1 | cut -d: -f1)"
+FIRST_WRITE="$(grep -nE '^[[:space:]]*run (sgdisk|parted)' "$INSTALL/base.sh" | head -1 | cut -d: -f1)"
+check "it checks the mirrors before it erases the disk" "a network failure would cost somebody their data" \
+  "$([ -n "$NET_CHECK" ] && [ -n "$FIRST_WRITE" ] && [ "$NET_CHECK" -lt "$FIRST_WRITE" ] && echo 0 || echo 1)"
+check "and says what to do about it" "it would just stop" \
+  "$(grep -q 'Connect this machine to the internet' "$INSTALL/base.sh" && echo 0 || echo 1)"
+check "a dry run does not contact the mirrors" "a dry run would need a network" \
+  "$(grep -q 'dry run, so the mirrors are not contacted' "$WORK/base2.txt" && echo 0 || echo 1)"
 check "legacy BIOS gets an MBR label" "it would not boot on a pre-2012 machine" \
   "$(grep -q 'mklabel msdos' "$WORK/base2.txt" && echo 0 || echo 1)"
 check "legacy BIOS gets a BIOS boot partition" "GRUB would have nowhere to go" \
