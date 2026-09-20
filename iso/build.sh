@@ -116,7 +116,11 @@ ln -sf /usr/lib/systemd/system/NetworkManager.service \
        "$PROFILE/airootfs/etc/systemd/system/multi-user.target.wants/NetworkManager.service"
 ln -sf /usr/lib/systemd/system/sshd.service \
        "$PROFILE/airootfs/etc/systemd/system/multi-user.target.wants/sshd.service"
-say "   NetworkManager and sshd will start on the live system"
+# Relative, because this one is a unit the profile carries rather than one the
+# package tree provides.
+ln -sf ../pacman-init.service \
+       "$PROFILE/airootfs/etc/systemd/system/multi-user.target.wants/pacman-init.service"
+say "   NetworkManager, sshd and the pacman keyring will start on the live system"
 
 # ---------------------------------------------------------------- XOS itself
 

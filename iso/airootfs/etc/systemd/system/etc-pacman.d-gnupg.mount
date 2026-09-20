@@ -1,0 +1,19 @@
+# A writable /etc/pacman.d/gnupg on a medium whose root is a squashfs.
+#
+# pacstrap builds the new system's keyring by way of the live system's own, and
+# pacman has to be able to write there. On install media the root filesystem is
+# read-only, so without this the install gets as far as downloading every
+# package, then fails with "keyring is not writable" twenty times over and
+# leaves a partitioned, formatted, empty disk behind.
+#
+# Arch's own releng profile carries this unit for the same reason. XOS's profile
+# did not, which is why an otherwise complete install stopped at pacstrap.
+
+[Unit]
+Description=Temporary /etc/pacman.d/gnupg directory
+
+[Mount]
+What=tmpfs
+Where=/etc/pacman.d/gnupg
+Type=tmpfs
+Options=mode=0755,noswap

@@ -1,0 +1,23 @@
+# Initialise the live system's pacman keyring at boot.
+#
+# Nothing can be installed from a mirror without it: packages are signed, and
+# an empty keyring means every signature is untrusted. It is bound to the tmpfs
+# mount beside it because the keyring it creates has to be somewhere writable.
+#
+# This is why the installer could download 550MB of packages and still fail. The
+# network was never the problem.
+
+[Unit]
+Description=Initializes Pacman keyring
+Requires=etc-pacman.d-gnupg.mount
+After=etc-pacman.d-gnupg.mount time-sync.target
+BindsTo=etc-pacman.d-gnupg.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/pacman-key --init
+ExecStart=/usr/bin/pacman-key --populate
+
+[Install]
+WantedBy=multi-user.target

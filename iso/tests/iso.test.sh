@@ -306,6 +306,20 @@ check "it bundles the wifi drivers" "an unsupported chip would have nothing to t
   "$(grep -q 'DKMS_PACKAGES' "$ISO/build.sh" && echo 0 || echo 1)"
 check "it enables networking on the live system" "the medium would boot with no network" \
   "$(grep -q 'NetworkManager.service' "$ISO/build.sh" && echo 0 || echo 1)"
+
+# The install downloaded every package it needed and then failed twenty times
+# with "keyring is not writable", leaving a partitioned, formatted, empty disk.
+# Packages are signed; the medium needs a keyring, and on a squashfs root that
+# keyring needs somewhere writable to live. Arch's own profile carries both of
+# these units. This one did not.
+check "the medium can write a pacman keyring" "pacstrap fails after downloading everything" \
+  "$([ -f "$ISO/airootfs/etc/systemd/system/etc-pacman.d-gnupg.mount" ] && echo 0 || echo 1)"
+check "and initialises it at boot" "every package signature would be untrusted" \
+  "$([ -f "$ISO/airootfs/etc/systemd/system/pacman-init.service" ] && echo 0 || echo 1)"
+check "the keyring init is actually enabled" "the unit would sit there unused" \
+  "$(grep -q 'pacman-init.service' "$ISO/build.sh" && echo 0 || echo 1)"
+check "it is bound to the writable mount" "it would run before there was anywhere to write" \
+  "$(grep -q 'BindsTo=etc-pacman.d-gnupg.mount' "$ISO/airootfs/etc/systemd/system/pacman-init.service" && echo 0 || echo 1)"
 check "it refuses to run without mkarchiso" "it would fail confusingly, late" \
   "$(grep -q 'need mkarchiso' "$ISO/build.sh" && echo 0 || echo 1)"
 check "--check reports without building" "no way to see what is missing first" \
