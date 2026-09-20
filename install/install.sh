@@ -112,6 +112,10 @@ run_step 07-models.sh
 run_step 08-desktop.sh
 run_step 09-xosd.sh
 
+# Last, because it reads what every step before it decided. base.sh wrote the
+# boot config long before the hardware step knew which card is in this machine.
+run_step 10-boot.sh
+
 xstep "Done"
 xlog ""
 xlog "   The XOS layer is applied. Nothing Omarchy owns was modified."

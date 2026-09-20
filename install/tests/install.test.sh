@@ -29,7 +29,7 @@ check() { if [ "$3" = "0" ]; then pass "$1"; else fail "$1" "$2"; fi; }
 
 SCRIPTS=(lib.sh base.sh install.sh boot.sh 00-hardware.sh 01-drivers.sh 02-runtimes.sh
          03-tools.sh 04-inference.sh 05-services.sh 06-opencode.sh 07-models.sh
-         08-desktop.sh 09-xosd.sh)
+         08-desktop.sh 09-xosd.sh 10-boot.sh)
 
 # ---------------------------------------------------------------- parsing
 
@@ -356,6 +356,94 @@ else
   check "it refuses to partition when it cannot tell UEFI from BIOS" "it guessed" \
     "$([ "$BASE4_EXIT" != "0" ] && grep -q 'cannot be determined' "$WORK/base4.txt" && echo 0 || echo 1)"
 fi
+
+# ---------------------------------------------------------------- the boot line
+
+printf '\nThe kernel command line reaches the boot menu\n'
+
+# base.sh writes GRUB's config while installing the base system. The hardware
+# step runs afterwards and is the thing that knows which card is in the machine.
+# Whatever it asks for therefore has to be applied by something that runs later
+# still, or it is written to a file nothing ever reads and an NVIDIA machine
+# comes up to a black screen.
+
+# arch-chroot is stubbed to do nothing, which would make a regeneration look
+# like it worked. This one actually writes a grub.cfg from the defaults file,
+# so the test can check the generated config rather than the input to it.
+BSTUBS="$WORK/stubs-boot"
+mkdir -p "$BSTUBS"
+cat > "$BSTUBS/arch-chroot" <<'STUB'
+#!/usr/bin/env bash
+root="$1"; shift
+if [ "${1:-}" = "grub-mkconfig" ]; then
+  out=""
+  while [ "$#" -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done
+  line="$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"$/\1/p' "$root/etc/default/grub" | tail -1)"
+  mkdir -p "$(dirname "$root$out")"
+  printf 'menuentry "XOS" {\n  linux /vmlinuz-linux root=/dev/vda2 %s\n}\n' "$line" > "$root$out"
+  exit 0
+fi
+exit 0
+STUB
+chmod +x "$BSTUBS/arch-chroot"
+
+boot_root() { # root
+  mkdir -p "$1/etc/xos" "$1/etc/default" "$1/var/log" "$1/boot/grub"
+  printf 'GRUB_CMDLINE_LINUX_DEFAULT="loglevel=3 quiet"\nGRUB_CMDLINE_LINUX=""\n' \
+    > "$1/etc/default/grub"
+}
+run_boot_step() { # root, extra args...
+  local root="$1"; shift
+  env PATH="$BSTUBS:$STUBS:$PATH" XOS_INSTALL_ROOT="$root" \
+      XOS_LOG="$root/var/log/xos-install.log" \
+      bash "$INSTALL/10-boot.sh" "$@" 2>&1
+}
+
+B1="$WORK/boot1"
+boot_root "$B1"
+run_boot_step "$B1" > "$WORK/boot1.txt"
+check "with nothing asked for it changes nothing" "it touched the boot config anyway" \
+  "$(grep -q 'no kernel parameters' "$WORK/boot1.txt" && echo 0 || echo 1)"
+
+B2="$WORK/boot2"
+boot_root "$B2"
+printf 'nvidia-drm.modeset=1\nibt=off\n' > "$B2/etc/xos/kernel-parameters"
+run_boot_step "$B2" --dry-run > "$WORK/boot2.txt"
+check "a dry run says what it would add and writes nothing" "a dry run edited the boot config" \
+  "$(grep -q 'would add them' "$WORK/boot2.txt" && ! grep -q 'nvidia-drm' "$B2/etc/default/grub" && echo 0 || echo 1)"
+
+B3="$WORK/boot3"
+boot_root "$B3"
+printf 'nvidia-drm.modeset=1\nibt=off\n' > "$B3/etc/xos/kernel-parameters"
+run_boot_step "$B3" > "$WORK/boot3.txt"
+check "what the hardware step asked for lands on the command line" "it did not reach /etc/default/grub" \
+  "$(grep -q 'nvidia-drm.modeset=1' "$B3/etc/default/grub" && grep -q 'ibt=off' "$B3/etc/default/grub" && echo 0 || echo 1)"
+check "and reaches the config the firmware actually reads" "grub.cfg was never regenerated" \
+  "$(grep -q 'nvidia-drm.modeset=1' "$B3/boot/grub/grub.cfg" 2>/dev/null && echo 0 || echo 1)"
+check "what was already there is kept" "it replaced the existing command line" \
+  "$(grep -q 'loglevel=3 quiet' "$B3/etc/default/grub" && echo 0 || echo 1)"
+check "it says the parameters reached the boot menu" "it claimed nothing either way" \
+  "$(grep -q 'now passes them to the kernel' "$WORK/boot3.txt" && echo 0 || echo 1)"
+
+run_boot_step "$B3" > "$WORK/boot3b.txt"
+check "running the layer twice does not add them twice" "the parameter accumulated" \
+  "$([ "$(grep -c 'nvidia-drm.modeset=1' "$B3/etc/default/grub")" = "1" ] && echo 0 || echo 1)"
+check "and it says so rather than pretending to work" "it reported a change it did not make" \
+  "$(grep -q 'already on the command line' "$WORK/boot3b.txt" && echo 0 || echo 1)"
+
+B4="$WORK/boot4"
+mkdir -p "$B4/etc/xos" "$B4/var/log"
+printf 'nvidia-drm.modeset=1\n' > "$B4/etc/xos/kernel-parameters"
+run_boot_step "$B4" > "$WORK/boot4.txt"
+check "with no GRUB it says the parameters were not applied" "it failed silently" \
+  "$(grep -q 'not applied' "$WORK/boot4.txt" && grep -q 'nvidia-drm.modeset=1' "$WORK/boot4.txt" && echo 0 || echo 1)"
+
+BOOT_STEP="$(grep -n 'run_step 10-boot.sh' "$INSTALL/install.sh" | cut -d: -f1)"
+HW_STEP="$(grep -n 'run_step 00-hardware.sh' "$INSTALL/install.sh" | cut -d: -f1)"
+check "the boot step runs after the hardware step, not before" "it would read a file not written yet" \
+  "$([ -n "$BOOT_STEP" ] && [ -n "$HW_STEP" ] && [ "$BOOT_STEP" -gt "$HW_STEP" ] && echo 0 || echo 1)"
+check "it is the last step in the layer" "a later step could still ask for a parameter" \
+  "$([ "$(grep -n 'run_step' "$INSTALL/install.sh" | tail -1 | cut -d: -f1)" = "$BOOT_STEP" ] && echo 0 || echo 1)"
 
 printf '\n%s passed, %s failed\n\n' "$PASSED" "$FAILED"
 [ "$FAILED" = "0" ]
