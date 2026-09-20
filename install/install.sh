@@ -93,8 +93,26 @@ else
   if [ "$XOS_DRY_RUN" = "1" ]; then
     xlog "   would run the Omarchy installer"
   elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL https://omarchy.org/install | bash >> "$XOS_LOG" 2>&1 \
-      || xsoft_fail "the Omarchy installer did not finish; the XOS layer will still apply"
+    if [ -n "$XOS_ROOT" ]; then
+      # Into the machine being built, not the machine doing the building.
+      # Everything else in this file is $XOS_ROOT-aware and this line was not,
+      # so during an install from the medium Omarchy went into the live
+      # system's RAM and the target disk got an Arch with no desktop on it.
+      # Downloaded first and run inside, because a pipe cannot cross a chroot.
+      mkdir -p "$XOS_ROOT/tmp" 2>/dev/null
+      if ! command -v arch-chroot >/dev/null 2>&1; then
+        xsoft_fail "no arch-chroot here, so Omarchy cannot be put into $XOS_ROOT"
+      elif curl -fsSL https://omarchy.org/install -o "$XOS_ROOT/tmp/omarchy-install" 2>> "$XOS_LOG"; then
+        arch-chroot "$XOS_ROOT" bash /tmp/omarchy-install >> "$XOS_LOG" 2>&1 \
+          || xsoft_fail "the Omarchy installer did not finish; the XOS layer will still apply"
+        rm -f "$XOS_ROOT/tmp/omarchy-install" 2>/dev/null
+      else
+        xsoft_fail "could not download the Omarchy installer; the XOS layer will still apply"
+      fi
+    else
+      curl -fsSL https://omarchy.org/install | bash >> "$XOS_LOG" 2>&1 \
+        || xsoft_fail "the Omarchy installer did not finish; the XOS layer will still apply"
+    fi
   else
     xsoft_fail "no curl, so Omarchy was skipped"
   fi

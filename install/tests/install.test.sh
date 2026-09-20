@@ -289,6 +289,22 @@ check "boot.sh points at a repository that exists" "the one-line install would f
   "$(grep -q 'github.com/gigad1k/XOS' "$INSTALL/boot.sh" && echo 0 || echo 1)"
 check "no placeholder host is offered as the way in" "xos.sh does not exist yet" \
   "$(grep -E '^#   curl' "$INSTALL/boot.sh" | grep -q 'xos.sh' && echo 1 || echo 0)"
+printf '
+Omarchy goes into the machine being built
+'
+
+# Every other line in install.sh is $XOS_ROOT-aware. This one was a pipe into
+# bash on the live system, so an install from the medium put Omarchy into RAM
+# and left the target disk an Arch with no desktop on it.
+check "it installs into the target root, not the live one" "the desktop would go into RAM" \
+  "$(grep -q 'arch-chroot "$XOS_ROOT" bash /tmp/omarchy-install' "$INSTALL/install.sh" && echo 0 || echo 1)"
+OMARCHY_GUARD="$(grep -n 'if \[ -n "\$XOS_ROOT" \]; then' "$INSTALL/install.sh" | head -1 | cut -d: -f1)"
+OMARCHY_PIPE="$(grep -n 'omarchy.org/install | bash' "$INSTALL/install.sh" | head -1 | cut -d: -f1)"
+check "the un-chrooted pipe is only reached when installing onto this machine" "it would still go to the wrong root" \
+  "$([ -n "$OMARCHY_GUARD" ] && [ -n "$OMARCHY_PIPE" ] && [ "$OMARCHY_PIPE" -gt "$OMARCHY_GUARD" ] && echo 0 || echo 1)"
+check "a download that fails does not stop the install" "one unreachable host would end everything" \
+  "$(grep -q 'could not download the Omarchy installer' "$INSTALL/install.sh" && echo 0 || echo 1)"
+
 
 printf '\nxosd installs on its own\n'
 
