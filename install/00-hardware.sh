@@ -104,12 +104,30 @@ record() {
 
 # ---------------------------------------------------------------- packages
 
-installed() {
-  if [ "$PACKAGE_MANAGER" = "pacman" ]; then
-    pacman -Qq "$1" >/dev/null 2>&1
+# Packages belong to the machine being built, not the machine doing the
+# building.
+#
+# ROOT is empty when XOS is installed onto this machine and something like
+# /mnt when it is installed from media. In the second case every pacman call
+# has to cross into that root, or the driver this file just resolved for this
+# card gets installed into a filesystem that is discarded at the next reboot,
+# and the machine comes up on its disk with no driver at all. A black screen,
+# which is the single outcome this file exists to prevent.
+#
+# The query is the same mistake in the other direction. Asking this machine
+# whether a package is installed answers about the medium, and the medium
+# carries plenty the target does not, so the install would skip them.
+pacman_here() {
+  if [ -n "$ROOT" ] && [ "$PACKAGE_MANAGER" = "pacman" ] &&
+     command -v arch-chroot >/dev/null 2>&1; then
+    arch-chroot "$ROOT" pacman "$@"
   else
-    "$PACKAGE_MANAGER" -Qq "$1" >/dev/null 2>&1
+    "$PACKAGE_MANAGER" "$@"
   fi
+}
+
+installed() {
+  pacman_here -Qq "$1" >/dev/null 2>&1
 }
 
 # Install a package, saying plainly whether it worked. Never fatal.
@@ -130,7 +148,7 @@ install_package() {
   fi
 
   log "   installing $package"
-  if "$PACKAGE_MANAGER" -S --noconfirm --needed "$package" >> "$LOG" 2>&1; then
+  if pacman_here -S --noconfirm --needed "$package" >> "$LOG" 2>&1; then
     return 0
   fi
   log "   $package did not install; moving down the chain"
@@ -417,7 +435,20 @@ elif [ "$HAS_WIFI_HARDWARE" = "1" ] || [ "${XOS_FAKE_WIFI:-}" = "0" ]; then
       if [ "$DRY_RUN" = "1" ]; then
         log "   would build $name from the install media"
       else
-        "$PACKAGE_MANAGER" -U --noconfirm "$source" >> "$LOG" 2>&1
+        # Into the machine being built. The package file sits on the medium, and
+        # that path does not exist inside the target root, so it travels first.
+        if [ -n "$ROOT" ] && [ "$PACKAGE_MANAGER" = "pacman" ] &&
+           command -v arch-chroot >/dev/null 2>&1; then
+          mkdir -p "$ROOT/var/cache/xos" 2>/dev/null
+          if cp "$source" "$ROOT/var/cache/xos/$name" 2>/dev/null; then
+            arch-chroot "$ROOT" pacman -U --noconfirm "/var/cache/xos/$name" >> "$LOG" 2>&1
+            rm -f "$ROOT/var/cache/xos/$name" 2>/dev/null
+          else
+            log "   could not copy $name onto the new system"
+          fi
+        else
+          "$PACKAGE_MANAGER" -U --noconfirm "$source" >> "$LOG" 2>&1
+        fi
       fi
       wifi_present && break
     done

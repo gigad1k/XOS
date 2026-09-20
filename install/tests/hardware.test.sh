@@ -357,5 +357,22 @@ check "the question cannot hold the install open" "one unanswered prompt stops e
 check "and an expired question sends nothing" "silence would be taken for consent" \
   "$(grep -q 'nobody answered, so nothing was sent' "$SCRIPT" && echo 0 || echo 1)"
 
+printf '
+Drivers go onto the disk, not into the medium
+'
+
+# This file resolves the driver for the card in this machine and then installs
+# it. During an install from media the machine running the script is the live
+# system in RAM, so a pacman call that does not cross into the target root puts
+# the driver somewhere the next reboot discards - and the machine comes up on
+# its own disk with no driver at all, which is the black screen this whole file
+# is written to prevent.
+check "installing crosses into the target root" "the driver would go into RAM" \
+  "$(grep -q 'arch-chroot "$ROOT" pacman' "$SCRIPT" && echo 0 || echo 1)"
+check "and asking what is installed asks the target too" "packages on the medium would be skipped" \
+  "$(grep -q 'pacman_here -Qq' "$SCRIPT" && echo 0 || echo 1)"
+check "no install reaches past the wrapper" "one direct call is one wrong root" \
+  "$(grep -qE '"[$]PACKAGE_MANAGER" -S' "$SCRIPT" && echo 1 || echo 0)"
+
 printf '\n%s passed, %s failed\n\n' "$PASSED" "$FAILED"
 [ "$FAILED" = "0" ]
