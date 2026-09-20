@@ -1119,3 +1119,44 @@ the wrong root or the wrong moment. The earlier claim in these notes that a
 search found no third instance was made before this one was looked for, and it
 was wrong. Ordering and targeting are now checked by tests in all three places,
 because prose in a comment did not stop any of them.
+
+#### It installs, and the machine boots from its own disk
+
+With the keyring units in place the unattended install ran through: it chose the
+largest disk, wrote an MBR with a BIOS boot partition, made and mounted both
+filesystems, pacstrapped Arch, installed GRUB, and handed over to the XOS layer,
+which read the machine and resolved its display driver (`bochs-drm` to `mesa`,
+confidence `known` — which also demonstrates the daemon working during an
+install, the thing these notes previously recorded as not working).
+
+Then it stopped and asked:
+
+```
+Send it? [y/N]
+```
+
+and waited, on a machine deliberately left alone. That prompt is guarded by "is
+stdin a tty", and a console is a tty whether or not anybody is sitting at it.
+Both halves are fixed: the answer can arrive through `XOS_ASSUME_NO`, which
+`live.sh` exports whenever it was told not to ask anything, and the question is
+bounded so a console nobody is reading cannot hold an install open. An expired
+question sends nothing.
+
+**The disk that install produced was then booted on its own, with no medium
+present:**
+
+```
+Arch Linux 7.2.6-arch2-1 (tty1)
+
+xos login:
+```
+
+That is the claim this project had never tested. An install carried through onto
+a disk, and a machine that boots from it afterwards, with the hostname the
+installer was told to set.
+
+What is proven and what is not, precisely: the base install completes and boots.
+The XOS layer had started and had finished its hardware step when this run was
+stopped at the prompt above; the desktop, the local model and the daemon's own
+units have not been carried through on a real disk yet. And still no physical
+machine: all of this is QEMU with KVM.
