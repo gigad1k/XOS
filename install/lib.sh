@@ -67,6 +67,27 @@ pinned_version() {
   ' "$XOS_LOCK"
 }
 
+# Run something on the machine being built rather than the machine doing the
+# building.
+#
+# The layer steps install pipx, npm, uv and the tools that come with them into
+# the target, and then ask `command -v` whether those tools exist - on this
+# machine. Installing from media that is the live system, where they never
+# were, so step after step found nothing and skipped itself: no Open WebUI, no
+# SearXNG, no messaging gateway, no OpenCode, no speech, no wake word, and no
+# local model. Every one of them soft-failed politely and the installed machine
+# came up missing most of what XOS is.
+#
+# A no-op when XOS is being installed onto this machine, which is the case the
+# bare calls were written for.
+in_target() {
+  if [ -n "$XOS_ROOT" ] && command -v arch-chroot >/dev/null 2>&1; then
+    arch-chroot "$XOS_ROOT" "$@"
+  else
+    "$@"
+  fi
+}
+
 # Run the package manager against whatever root is being installed to.
 #
 # This is the difference between installing XOS and installing nothing. Left to

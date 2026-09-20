@@ -123,26 +123,14 @@ CONFIDENCE="$(printf '%s' "$CHOICE" | cut -f5)"
 xlog "   $MODEL_NAME  ($CONFIDENCE)"
 xlog "   $REPOSITORY / $FILE"
 
-# Downloading belongs to the machine being built.
+# Downloading belongs to the machine being built. in_target, from lib.sh, is
+# how: uv and the huggingface CLI were installed into the target by
+# 02-runtimes and are not on this machine at all during an install from media.
 #
-# uv and the huggingface CLI are installed into the target by 02-runtimes, not
-# onto whatever is running this script. Installing from media, neither is on
-# PATH here, so both steps below found nothing and skipped - leaving a machine
-# whose entire point is a local model without one, on a project whose first
-# non-negotiable is that it works offline.
-#
-# The paths change with it: inside the target, $XOS_ROOT/opt/xos/models is
-# /opt/xos/models.
+# The path changes with it: $XOS_ROOT/opt/xos/models from outside is
+# /opt/xos/models from within.
 MODELS_THERE="/opt/xos/models"
 [ -z "$XOS_ROOT" ] && MODELS_THERE="$MODELS"
-
-in_target() {
-  if [ -n "$XOS_ROOT" ] && command -v arch-chroot >/dev/null 2>&1; then
-    arch-chroot "$XOS_ROOT" "$@"
-  else
-    "$@"
-  fi
-}
 
 xstep "The downloader"
 if [ "$XOS_DRY_RUN" = "1" ]; then

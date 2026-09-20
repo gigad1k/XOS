@@ -14,8 +14,8 @@ xstep "OpenCode"
 
 if [ "$XOS_DRY_RUN" = "1" ]; then
   xlog "   would install opencode"
-elif command -v npm >/dev/null 2>&1; then
-  npm install -g opencode-ai >> "$XOS_LOG" 2>&1 \
+elif in_target command -v npm >/dev/null 2>&1; then
+  in_target npm install -g opencode-ai >> "$XOS_LOG" 2>&1 \
     || xsoft_fail "OpenCode did not install; XOS will do coding work itself, less well"
 else
   xsoft_fail "npm is missing, so OpenCode was skipped"

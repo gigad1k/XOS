@@ -74,8 +74,8 @@ if [ -d "$DESKTOP/plymouth/xos" ]; then
       && xlog "   installed the plymouth theme"
     # Setting it is a separate decision from installing it: on a machine with a
     # slow disk, a splash that hides a long boot is worse than watching it.
-    if command -v plymouth-set-default-theme >/dev/null 2>&1; then
-      plymouth-set-default-theme xos >> "$XOS_LOG" 2>&1 \
+    if in_target command -v plymouth-set-default-theme >/dev/null 2>&1; then
+      in_target plymouth-set-default-theme xos >> "$XOS_LOG" 2>&1 \
         || xsoft_fail "could not set the plymouth theme"
     fi
   fi

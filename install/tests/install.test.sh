@@ -290,6 +290,28 @@ check "boot.sh points at a repository that exists" "the one-line install would f
 check "no placeholder host is offered as the way in" "xos.sh does not exist yet" \
   "$(grep -E '^#   curl' "$INSTALL/boot.sh" | grep -q 'xos.sh' && echo 1 || echo 0)"
 printf '
+No step asks this machine about the machine being built
+'
+
+# pipx, npm and uv are installed into the target by 02-runtimes. Every step
+# that used them asked `command -v` here instead, found nothing during an
+# install from media, and skipped itself politely: no Open WebUI, no SearXNG,
+# no messaging gateway, no OpenCode, no speech, no wake word. The machine came
+# up missing most of what XOS is, and every one of those was a soft failure
+# with a reasonable-sounding message.
+STRAY=""
+for step in 04-inference.sh 05-services.sh 06-opencode.sh 07-models.sh 08-desktop.sh; do
+  grep -nE '^[[:space:]]*((el)?if )?command -v (uv|pipx|npm|plymouth)' "$INSTALL/$step" \
+    >/dev/null 2>&1 && STRAY="$STRAY $step"
+  grep -nE '^[[:space:]]*(uv|pipx|npm|plymouth-set-default-theme) ' "$INSTALL/$step" \
+    >/dev/null 2>&1 && STRAY="$STRAY $step"
+done
+check "no layer step probes or installs on the wrong machine" "stray:$STRAY" \
+  "$([ -z "$STRAY" ] && echo 0 || echo 1)"
+check "and lib.sh is where crossing into the target lives" "each step would grow its own copy" \
+  "$(grep -q '^in_target() {' "$INSTALL/lib.sh" && echo 0 || echo 1)"
+
+printf '
 The local model goes onto the disk too
 '
 

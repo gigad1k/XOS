@@ -89,8 +89,8 @@ xstep "piper"
 if [ "$XOS_DRY_RUN" = "1" ]; then
   xlog "   would install piper"
 else
-  if command -v uv >/dev/null 2>&1; then
-    uv tool install piper-tts >> "$XOS_LOG" 2>&1 \
+  if in_target command -v uv >/dev/null 2>&1; then
+    in_target uv tool install piper-tts >> "$XOS_LOG" 2>&1 \
       || xsoft_fail "piper did not install; speech output will be unavailable"
   else
     xsoft_fail "uv is missing, so piper was skipped"
@@ -102,8 +102,8 @@ if [ "$XOS_DRY_RUN" = "1" ]; then
   xlog "   would install openWakeWord"
 else
   pin_install python-onnxruntime || xsoft_fail "onnxruntime is missing"
-  if command -v uv >/dev/null 2>&1; then
-    uv tool install openwakeword >> "$XOS_LOG" 2>&1 \
+  if in_target command -v uv >/dev/null 2>&1; then
+    in_target uv tool install openwakeword >> "$XOS_LOG" 2>&1 \
       || xsoft_fail "openWakeWord did not install; wake words will be unavailable"
   fi
 fi

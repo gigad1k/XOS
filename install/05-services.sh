@@ -110,8 +110,8 @@ UNIT
 
 if [ "$XOS_DRY_RUN" = "1" ]; then
   xlog "   would install open-webui"
-elif command -v pipx >/dev/null 2>&1; then
-  pipx install open-webui >> "$XOS_LOG" 2>&1 \
+elif in_target command -v pipx >/dev/null 2>&1; then
+  in_target pipx install open-webui >> "$XOS_LOG" 2>&1 \
     || xsoft_fail "Open WebUI did not install; the chat interface will be the CLI"
 else
   xsoft_fail "pipx is missing, so Open WebUI was skipped"
@@ -146,8 +146,8 @@ UNIT
 
 if [ "$XOS_DRY_RUN" = "1" ]; then
   xlog "   would install searxng"
-elif command -v pipx >/dev/null 2>&1; then
-  pipx install searxng >> "$XOS_LOG" 2>&1 \
+elif in_target command -v pipx >/dev/null 2>&1; then
+  in_target pipx install searxng >> "$XOS_LOG" 2>&1 \
     || xsoft_fail "SearXNG did not install; search will need an API"
 fi
 
@@ -160,8 +160,8 @@ xstep "OpenClaw gateway"
 # than no messaging gateway: someone sends a message and believes it arrived.
 if [ "$XOS_DRY_RUN" = "1" ]; then
   xlog "   would install the OpenClaw gateway under Node"
-elif command -v npm >/dev/null 2>&1; then
-  npm install -g openclaw >> "$XOS_LOG" 2>&1 \
+elif in_target command -v npm >/dev/null 2>&1; then
+  in_target npm install -g openclaw >> "$XOS_LOG" 2>&1 \
     || xsoft_fail "the OpenClaw gateway did not install; messaging will be unavailable"
 else
   xsoft_fail "npm is missing, so the OpenClaw gateway was skipped"
