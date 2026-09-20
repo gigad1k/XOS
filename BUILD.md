@@ -1234,3 +1234,32 @@ at — the case all fourteen bare calls were written for.
 
 The test greps every layer step for a bare probe or a bare call; against the
 commit before the fix it names four files.
+
+#### Proven end to end
+
+On a medium built from every fix above, with nothing touched after choosing the
+unattended entry:
+
+- it picked the largest disk, wrote an MBR with a BIOS boot partition, made and
+  mounted both filesystems;
+- `pacstrap` succeeded, with no keyring error;
+- `arch-chroot /mnt grub-install --target=i386-pc /dev/vda`, and "Base install
+  finished. Arch is on /dev/vda and it boots bios";
+- the XOS layer ran against `root: /mnt`, the target, not the live medium;
+- the hardware step read the machine through the daemon and resolved its display
+  driver;
+- it rebooted itself, unmounting the `/etc/pacman.d/gnupg` tmpfs on the way out.
+
+And the disk it produced, booted on its own with no medium anywhere near it:
+
+```
+Arch Linux 7.2.6-arch2-1 (tty1)
+
+xos login:
+```
+
+What is still not proven: no physical machine has run any of this, the bundled
+wifi DKMS drivers have never been built because that step reaches the AUR, and
+the layer's optional services were not individually verified on the installed
+disk — only that they now run against the right root, which is what every one of
+them was getting wrong.
