@@ -297,6 +297,55 @@ impl Database {
                     kernel_driver_in_use: device.kernel_driver.clone(),
                 };
             }
+
+            // No range matched. For NVIDIA that does not mean "unknown card, be
+            // careful": the ranges run to the newest architecture this build
+            // knows about, so an id past the end of them is a card released
+            // after this build was made. Reaching for nouveau there is the
+            // worst available answer, because nouveau is the driver least
+            // likely to have grown support for something new, while the current
+            // branch is the one that will have.
+            //
+            // So recommend it, keep nouveau as the fallback, and say the
+            // confidence is inferred. The table did not know this card and
+            // saying "confirmed" about it, which is what happened before, is a
+            // claim nobody checked.
+            if device.class == "display" {
+                let packages = self.nvidia_branches.branch_packages.get("current");
+                let mut fallback: Vec<String> =
+                    entry.map(|entry| entry.fallback.clone()).unwrap_or_default();
+                if fallback.is_empty() {
+                    fallback.push("nouveau".to_string());
+                }
+                if fallback.last().map(String::as_str) != Some("vesa") {
+                    fallback.push("vesa".to_string());
+                }
+
+                return Resolution {
+                    device: device.description.clone(),
+                    vendor: entry.map(|entry| entry.vendor.clone()),
+                    vendor_id: device.vendor_id.clone(),
+                    device_id: device.device_id.clone(),
+                    class: device.class.clone(),
+                    architecture: None,
+                    driver: packages
+                        .map(|p| p.driver.clone())
+                        .unwrap_or_else(|| "nouveau".to_string()),
+                    utils: packages.map(|p| p.utils.clone()),
+                    branch: Some("current".to_string()),
+                    firmware: vec!["linux-firmware".to_string()],
+                    kernel_parameters: packages
+                        .map(|p| p.kernel_parameters.clone())
+                        .unwrap_or_default(),
+                    fallback,
+                    confidence: "inferred".to_string(),
+                    why: Some(
+                        "this device id is past every range in the table, so the card is                          newer than this XOS. The current branch is the one most likely to                          drive it; nouveau is there for when it does not."
+                            .to_string(),
+                    ),
+                    kernel_driver_in_use: device.kernel_driver.clone(),
+                };
+            }
         }
 
         // GCN 1.0 and 1.1 are driven by radeon unless the kernel is told
@@ -444,6 +493,105 @@ mod tests {
             kernel_driver: None,
             vram_mb: None,
         }
+    }
+
+    /// Real device ids for cards sold in the last five years.
+    ///
+    /// Not a sample: one per silicon family, desktop, laptop and professional,
+    /// because the ranges are written per architecture and a family that falls
+    /// in a gap between two of them gets nouveau on a card that needs a driver.
+    const LAST_FIVE_YEARS: &[(&str, &str)] = &[
+        ("2204", "RTX 3090"),
+        ("2206", "RTX 3080"),
+        ("2484", "RTX 3070"),
+        ("2487", "RTX 3060 Ti"),
+        ("2503", "RTX 3060"),
+        ("2507", "RTX 3050"),
+        ("25a0", "RTX 3050 Ti laptop"),
+        ("249d", "RTX 3060 laptop"),
+        ("2531", "RTX A2000"),
+        ("2330", "H100"),
+        ("2684", "RTX 4090"),
+        ("2704", "RTX 4080"),
+        ("2782", "RTX 4070 Ti"),
+        ("2786", "RTX 4070"),
+        ("2803", "RTX 4060 Ti"),
+        ("2882", "RTX 4060"),
+        ("28a0", "RTX 4060 laptop"),
+        ("26b5", "L40"),
+        ("2b85", "RTX 5090"),
+        ("2c02", "RTX 5080"),
+        ("2c05", "RTX 5070 Ti"),
+        ("2d04", "RTX 5070"),
+    ];
+
+    #[test]
+    fn every_nvidia_card_of_the_last_five_years_gets_a_real_driver() {
+        let database = database();
+        for (id, name) in LAST_FIVE_YEARS {
+            let resolution = database.resolve(&gpu(id));
+            assert_eq!(
+                resolution.driver, "nvidia-open-dkms",
+                "{name} (10de:{id}) resolved to {}",
+                resolution.driver
+            );
+            assert_eq!(
+                resolution.branch.as_deref(),
+                Some("current"),
+                "{name} (10de:{id}) landed on the wrong branch"
+            );
+            assert!(
+                resolution.utils.is_some(),
+                "{name} (10de:{id}) got a kernel module and no userspace,                  which is a black screen"
+            );
+        }
+    }
+
+    #[test]
+    fn a_card_newer_than_the_table_is_not_handed_to_nouveau() {
+        // The ranges stop at the newest architecture this build knows about, so
+        // an id past the end of them is a card released after it. That is the
+        // ordinary case for any machine bought after this XOS was built, and
+        // nouveau is the driver least likely to support something new.
+        let database = database();
+        for id in ["3000", "3180", "31a0", "4000"] {
+            let resolution = database.resolve(&gpu(id));
+            assert_eq!(
+                resolution.driver, "nvidia-open-dkms",
+                "10de:{id} was sent to {}",
+                resolution.driver
+            );
+            assert!(
+                resolution.fallback.iter().any(|f| f == "nouveau"),
+                "10de:{id} has no way back to a picture"
+            );
+        }
+    }
+
+    #[test]
+    fn a_card_the_table_has_never_seen_does_not_claim_to_be_confirmed() {
+        // `confirmed` means somebody ran it on that hardware. Saying it about a
+        // device id nothing in the table matches is a claim nobody checked, and
+        // the whole point of carrying a confidence is that it can be trusted.
+        let database = database();
+        let resolution = database.resolve(&gpu("3180"));
+        assert_eq!(resolution.confidence, "inferred");
+        assert!(
+            resolution.why.is_some(),
+            "an inference has to say what it was inferred from"
+        );
+    }
+
+    #[test]
+    fn hopper_is_not_reported_as_ampere() {
+        // Same branch either way, so nothing breaks on the machine - but the
+        // architecture goes into every report sent to the community database,
+        // and a wrong one there is wrong for everybody who reads it afterwards.
+        let database = database();
+        assert_eq!(
+            database.resolve(&gpu("2330")).architecture.as_deref(),
+            Some("Hopper")
+        );
     }
 
     #[test]

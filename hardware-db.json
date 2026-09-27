@@ -60,6 +60,14 @@
         "confidence": "known"
       },
       {
+        "from": "0x2300",
+        "to": "0x233F",
+        "architecture": "Hopper",
+        "branch": "current",
+        "confidence": "known",
+        "why": "H100 and its siblings. The same branch as Ampere, but reporting them as Ampere put a wrong architecture into every report sent to the community database."
+      },
+      {
         "from": "0x2200",
         "to": "0x25FF",
         "architecture": "Ampere",
