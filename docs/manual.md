@@ -7,6 +7,17 @@ every one of those things is something you can watch, stop and undo.
 
 It is built for the computer you already have. Not a new one.
 
+
+## What it looks like
+
+| | |
+|---|---|
+| ![Mission Control](images/mission-control.jpg) | **Mission Control.** What XOS is working on, what it has done, what the machine is doing, and what any of it cost. |
+| ![The chat TUI](images/chat-tui.jpg) | **`xos chat`.** The default interface. The badge on the status line says which tier answered. |
+
+More, including the installer and the machine it produces, in
+[images/README.md](images/README.md) — which also says how each one was taken.
+
 ---
 
 ## Before anything else: three things worth knowing

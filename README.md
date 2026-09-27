@@ -54,6 +54,12 @@ that cost. Served on loopback; forward it over SSH rather than exposing it.
 
 ![XOS Mission Control](docs/images/mission-control.jpg)
 
+**`xos chat`** — the default interface, and the one that works on hardware where
+a browser struggles. The badge on the status line says which tier answered:
+green means it never left the machine.
+
+![The XOS chat TUI](docs/images/chat-tui.jpg)
+
 **Installing.** Put the medium in, turn the machine on, and the installer starts
 by itself. This is the unattended entry running: partitioning, filesystems,
 Arch, the bootloader, and then the XOS layer applied to the new disk rather than
