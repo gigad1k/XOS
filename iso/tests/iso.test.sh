@@ -325,6 +325,21 @@ check "it refuses to run without mkarchiso" "it would fail confusingly, late" \
 check "--check reports without building" "no way to see what is missing first" \
   "$(grep -q 'CHECK_ONLY' "$ISO/build.sh" && echo 0 || echo 1)"
 
+# A medium has to be able to say which XOS is on it. The first attempt at this
+# read the version with a sed backreference that did not survive being written,
+# and produced an image called xos--2026.09.27 with a blank in the banner.
+check "the build reads the version from Cargo.toml" "the medium could not say which XOS it is" \
+  "$(grep -q 'XOS_VERSION=' "$ISO/build.sh" && echo 0 || echo 1)"
+check "and refuses to build without one" "it would ship a blank where the version goes" \
+  "$(grep -q 'could not read the version out of' "$ISO/build.sh" && echo 0 || echo 1)"
+check "the image filename carries it" "a stick in a drawer could not be identified" \
+  "$(grep -q 'XOS_VERSION' "$ISO/profiledef.sh" && echo 0 || echo 1)"
+check "and so does the banner" "nothing on screen would say the version" \
+  "$(grep -q '{{VERSION}}' "$ISO/airootfs/etc/motd" && echo 0 || echo 1)"
+VERSION_FROM_CARGO="$(grep -m1 '^version = ' "$REPO/Cargo.toml" | cut -d'"' -f2)"
+check "and that version is real" "Cargo.toml has no version to read" \
+  "$([ -n "$VERSION_FROM_CARGO" ] && echo 0 || echo 1)"
+
 # The drivers the build script writes must be where 00-hardware.sh looks.
 DKMS_BUILD_PATH="$(grep -oE 'DKMS_DIR="\$PROFILE/airootfs[^"]*"' "$ISO/build.sh" | head -1 | sed 's|.*airootfs||; s|"||')"
 check "the bundled drivers land where 00-hardware.sh looks" \

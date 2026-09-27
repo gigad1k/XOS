@@ -131,7 +131,14 @@ step "Putting XOS on the medium"
 # Cargo.toml is the source of truth for what this XOS is, so the medium, the
 # ISO filename and `xosd --version` cannot drift apart. profiledef.sh reads
 # XOS_VERSION out of the environment, which is why this is exported.
-XOS_VERSION="$(sed -n 's/^version = "\(.*\)"$//p' "$REPO/Cargo.toml" | head -1)"
+XOS_VERSION="$(grep -m1 '^version = ' "$REPO/Cargo.toml" | cut -d'"' -f2)"
+if [ -z "$XOS_VERSION" ]; then
+  # A medium whose filename and banner have a blank where the version goes is
+  # worse than no medium: it cannot be matched to anything later.
+  warn "could not read the version out of $REPO/Cargo.toml"
+  say  "   the image would be named xos--<date> and the banner would be blank"
+  exit 1
+fi
 export XOS_VERSION
 say "   version: ${XOS_VERSION:-unknown}"
 
