@@ -60,6 +60,11 @@ green means it never left the machine.
 
 ![The XOS chat TUI](docs/images/chat-tui.jpg)
 
+**The boot menu.** Pressing Enter installs with the questions asked. The third
+entry does it without asking anything, and says so.
+
+![The XOS boot menu](docs/images/boot-menu.png)
+
 **Installing.** Put the medium in, turn the machine on, and the installer starts
 by itself. This is the unattended entry running: partitioning, filesystems,
 Arch, the bootloader, and then the XOS layer applied to the new disk rather than
