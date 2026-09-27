@@ -126,6 +126,7 @@ cargo run --bin xos
 | `PROMPTS.md` | The build prompts, P0 through P14 |
 | `docs/spec.md` | The full specification |
 | `brand/README.md` | The mark, and the one rule about colouring it |
+| `CONTRIBUTING.md` | Building, testing, and the mistake this repo keeps making |
 
 ## Licence
 
