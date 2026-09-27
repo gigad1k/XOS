@@ -549,29 +549,42 @@ Two community tables ship with XOS, and both take pull requests.
 - `verified-models.json` — which model suits which machine. Add a row if you run
   one successfully, and say what you measured.
 
-Every row carries a confidence. `confirmed` means somebody ran it on that
-hardware. `known` means it should work and nobody has proved it. Say which yours
-is, and say what machine you tested on.
+Every row carries a confidence, and they mean different things on purpose:
+
+| | Means |
+|---|---|
+| `confirmed` | somebody ran it on that hardware |
+| `known` | it should work and nobody has proved it |
+| `inferred` | the table did not have this card, and XOS reasoned from the vendor |
+| `generic` | no vendor row at all; the path that produces a picture on anything |
+
+Say which yours is, and say what machine you tested on. Never write `confirmed`
+for something you have not run — the value only means anything while it is
+true, and the installer shows it to people deciding whether to trust a driver.
 
 ---
 
 ## Known limits, stated plainly
 
-- **Never installed on real hardware.** The medium has been booted on both
-  firmwares in a virtual machine and the installer has been run as far as
-  choosing a disk. Nothing has been installed onto a disk and rebooted, and no
-  physical machine has run any of it. Use a VM first.
+- **Never installed on real hardware.** The medium boots on both firmwares, the
+  unattended install runs start to finish, and the disk it produces boots on its
+  own afterwards — all of that in QEMU with KVM. No physical machine has run any
+  of it. Use a VM first.
 - **Memory is not recalled into conversations.** It is written and searchable;
   the answering path does not consult it yet.
 - **Package versions are pinned to what was current when written.** Arch moves. A
   stale pin degrades the install rather than breaking it — XOS reports what it
   could not get and carries on.
-- **One `confirmed` graphics row.** The GTX 1080. Everything else in the NVIDIA
-  table is from documentation, not from somebody's machine.
-- **The install medium has never been built or booted.** The archiso profile is
-  written and its own tests pass, but `mkarchiso` needs an Arch machine and there
-  has not been one. Both firmware paths, the boot menus and the bundled drivers
-  are unproven in the only way that counts.
+- **One `confirmed` graphics row.** The GTX 1080. Everything else in the table is
+  from documentation rather than somebody's machine: `known` where the answer is
+  documented, and `inferred` for a card newer than the table, which gets the
+  current branch on the reasoning that a card released after this build is not
+  one nouveau will know either.
+- **The desktop has not been seen running.** The base install and the XOS layer
+  have been carried through onto a disk, but Omarchy's desktop needs hardware
+  with a screen attached to be judged, and the layer's optional services — Open
+  WebUI, SearXNG, the messaging gateway — have been verified only to the point
+  of installing into the right root.
 - **The bundled wifi drivers are built from the AUR at image-build time.** If the
   AUR is unreachable or a package does not build, the medium is made without
   them and says so, and the deepest wifi fallback then has nothing to try.

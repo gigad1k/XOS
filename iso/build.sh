@@ -126,6 +126,15 @@ say "   NetworkManager, sshd and the pacman keyring will start on the live syste
 
 step "Putting XOS on the medium"
 
+# The version, from the one place that holds it.
+#
+# Cargo.toml is the source of truth for what this XOS is, so the medium, the
+# ISO filename and `xosd --version` cannot drift apart. profiledef.sh reads
+# XOS_VERSION out of the environment, which is why this is exported.
+XOS_VERSION="$(sed -n 's/^version = "\(.*\)"$//p' "$REPO/Cargo.toml" | head -1)"
+export XOS_VERSION
+say "   version: ${XOS_VERSION:-unknown}"
+
 SOURCE="$PROFILE/airootfs/root/xos"
 mkdir -p "$SOURCE"
 # The working tree as committed, so the medium carries no build output and no
@@ -154,6 +163,13 @@ if [ ! -f "$SOURCE/install/live.sh" ]; then
   exit 1
 fi
 chmod +x "$SOURCE"/install/*.sh 2>/dev/null
+
+# The motd says which XOS this medium is. Filled in here rather than committed,
+# because the committed file would go stale the moment the version moved.
+if [ -f "$PROFILE/airootfs/etc/motd" ]; then
+  sed -i "s/{{VERSION}}/${XOS_VERSION:-unknown}/" "$PROFILE/airootfs/etc/motd" 2>/dev/null
+  say "   the medium says it is XOS ${XOS_VERSION:-unknown}"
+fi
 
 # ---------------------------------------------------------------- binaries
 

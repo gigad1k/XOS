@@ -16,7 +16,9 @@ iso_name="xos"
 iso_label="XOS_$(date +%Y%m)"
 iso_publisher="XOS <https://github.com/gigad1k/XOS>"
 iso_application="XOS install medium"
-iso_version="$(date +%Y.%m.%d)"
+# The release version and the day it was built. A medium that says only
+# when it was made cannot be matched to the XOS on it.
+iso_version="${XOS_VERSION:-0.0.0}-$(date +%Y.%m.%d)"
 install_dir="arch"
 buildmodes=('iso')
 

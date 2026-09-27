@@ -3170,7 +3170,7 @@ dependencies = [
 
 [[package]]
 name = "xos-bench"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "serde",
@@ -3180,7 +3180,7 @@ dependencies = [
 
 [[package]]
 name = "xos-cli"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -3193,7 +3193,7 @@ dependencies = [
 
 [[package]]
 name = "xosd"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "age",
  "async-stream",

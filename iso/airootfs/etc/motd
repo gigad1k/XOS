@@ -1,5 +1,5 @@
 
-  XOS install medium
+  XOS {{VERSION}}  ·  install medium
 
   The installer starts by itself in a moment. Nothing is erased until you
   have seen the disk and typed its name back.

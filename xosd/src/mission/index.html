@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>XOS Mission Control</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='6.4' fill='none' stroke='%23E4E1DB' stroke-width='1.5'/%3E%3Cpath d='M4 4 L8.2 8.2 M15.8 15.8 L20 20 M20 4 L15.8 8.2 M8.2 15.8 L4 20' stroke='%23E4E1DB' stroke-width='2.2'/%3E%3C/svg%3E">
 <style>
 /* Instrumentation, not a consumer app. Dense rows, hairlines, 3px radius, no
    shadows. Labels in sans left-aligned, values in mono right-aligned with
@@ -40,6 +41,17 @@ header {
   border-bottom: 1px solid var(--line);
 }
 h1 { font-size: 13px; font-weight: 500; margin: 0; letter-spacing: 0.02em; }
+/* The wordmark is XOS; what follows it is the name of one screen, so it
+   recedes rather than competing. Weight and tone, never colour. */
+.wordmark-dim { color: var(--dim); font-weight: 400; }
+.mark { color: var(--text); flex: 0 0 auto; }
+/* A version is machine data, so it is mono, like every other value here. */
+.version {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px; color: var(--faint);
+  border: 1px solid var(--line); border-radius: 3px;
+  padding: 1px 5px;
+}
 .spacer { flex: 1; }
 
 button {
@@ -138,7 +150,13 @@ body.halted .banner { display: block; }
 <div class="banner">halted — nothing autonomous is running. Resume when you are ready.</div>
 
 <header>
-  <h1>XOS Mission Control</h1>
+  <svg class="mark" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+    <circle cx="12" cy="12" r="6.4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <path d="M4 4 L8.2 8.2 M15.8 15.8 L20 20 M20 4 L15.8 8.2 M8.2 15.8 L4 20"
+          stroke="currentColor" stroke-width="2.2"/>
+  </svg>
+  <h1>XOS <span class="wordmark-dim">Mission Control</span></h1>
+  <span class="version" id="version">{{VERSION}}</span>
   <span class="muted" id="machine"></span>
   <span class="spacer"></span>
   <span class="muted">cost mode</span>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     role="img" aria-label="XOS">
+  <title>XOS</title>
+  <!--
+    A registration mark: the thing you line an instrument up against.
+
+    Monochrome on purpose. XOS has exactly three colours and each means one
+    thing - running locally, costing money, stopped - so a logo borrowing any
+    of them would be saying something it does not mean. Every stroke is
+    currentColor, so the mark takes the colour of whatever it sits on and works
+    unchanged on the dark and light themes.
+
+    An X in a rounded square was tried first. It reads as a close button, which
+    is what every interface on earth uses it for.
+  -->
+  <circle cx="12" cy="12" r="6.4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <path d="M4 4 L8.2 8.2 M15.8 15.8 L20 20 M20 4 L15.8 8.2 M8.2 15.8 L4 20"
+        stroke="currentColor" stroke-width="2.2" stroke-linecap="butt"/>
+</svg>

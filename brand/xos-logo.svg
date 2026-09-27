@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 24" width="104" height="24"
+     role="img" aria-label="XOS">
+  <title>XOS</title>
+  <circle cx="12" cy="12" r="6.4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <path d="M4 4 L8.2 8.2 M15.8 15.8 L20 20 M20 4 L15.8 8.2 M8.2 15.8 L4 20"
+        stroke="currentColor" stroke-width="2.2" stroke-linecap="butt"/>
+  <text x="32" y="17.2" fill="currentColor"
+        font-family="IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif"
+        font-size="15.5" font-weight="500" letter-spacing="0.16em">XOS</text>
+</svg>

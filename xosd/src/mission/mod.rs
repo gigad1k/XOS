@@ -105,7 +105,14 @@ async fn route(
 ) -> (&'static str, &'static str, String) {
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => {
-            ("200 OK", "text/html; charset=utf-8", PAGE.to_string())
+            // The page carries the build version so that what somebody
+            // is looking at can be named in a bug report. One constant,
+            // from Cargo, shared with `xosd --version` and `xos`.
+            (
+                "200 OK",
+                "text/html; charset=utf-8",
+                PAGE.replace("{{VERSION}}", crate::VERSION),
+            )
         }
         // The first run, matching the terminal wizard. Both ask the daemon what
         // the goal will do, and both run the same one.

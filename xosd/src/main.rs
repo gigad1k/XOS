@@ -48,8 +48,67 @@ use spend::SpendBook;
 use state::Halt;
 use vault::Vault;
 
+/// The version this build reports, everywhere it reports one.
+///
+/// One constant from Cargo, so the daemon, the CLI, Mission Control and the
+/// install medium can never disagree about which XOS this is.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Answer the flags a person would try before doing anything else.
+///
+/// xosd took no arguments at all, which meant `xosd --version` started a
+/// daemon, and so did `xosd --help`, and so did a typo. A long-running process
+/// is not what somebody asking a question wants, and on a server it is the
+/// opposite of harmless.
+///
+/// Returns Some(exit code) when the process should stop here.
+fn answer_flags() -> Option<ExitCode> {
+    let mut unknown: Vec<String> = Vec::new();
+    for argument in std::env::args().skip(1) {
+        match argument.as_str() {
+            "--version" | "-V" => {
+                println!("xosd {VERSION}");
+                return Some(ExitCode::SUCCESS);
+            }
+            "--help" | "-h" => {
+                println!("xosd {VERSION}");
+                println!();
+                println!("XOS Core: the daemon every other part of XOS talks to.");
+                println!();
+                println!("It takes no options. Where it listens, which model it");
+                println!("uses and everything else comes from the config file,");
+                println!("so that the daemon and the tools that talk to it read");
+                println!("the same answer from the same place:");
+                println!();
+                println!("  ~/.config/xos/config.toml");
+                println!();
+                println!("  XOS_SOCKET   listen somewhere other than the config says");
+                println!("  XOS_LOG      tracing filter, e.g. debug");
+                println!();
+                println!("Ask it things with `xos`: xos status, xos hardware, xos chat.");
+                return Some(ExitCode::SUCCESS);
+            }
+            other => unknown.push(other.to_string()),
+        }
+    }
+
+    if !unknown.is_empty() {
+        // Refused rather than ignored. Starting a daemon because an option was
+        // misspelled is how somebody ends up with two of them running.
+        eprintln!("xosd: unrecognised argument: {}", unknown.join(" "));
+        eprintln!("xosd takes no options. Try `xosd --help`.");
+        return Some(ExitCode::FAILURE);
+    }
+
+    None
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
+    if let Some(code) = answer_flags() {
+        return code;
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_env("XOS_LOG").unwrap_or_else(|_| EnvFilter::new("info")),
